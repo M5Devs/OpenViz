@@ -6,9 +6,12 @@ license = "GPL-3.0-or-later"
 
 [dependencies]
 bytemuck = { version = "1.25.2", features = ["derive"] }
+cpal = "0.15"
 pollster = "0.3"
+ringbuf = "0.4"
 rustfft = "6.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+symphonia = { version = "0.5", features = ["all"] }
 thiserror = "1.0"
 wgpu = "22.0"
