@@ -1,3 +1,7 @@
+pub mod effects;
+#[cfg(test)]
+mod effects_tests;
+
 use rustfft::{num_complex::Complex, Fft, FftPlanner};
 use serde::Serialize;
 use std::sync::Arc;

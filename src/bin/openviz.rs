@@ -15,8 +15,46 @@ fn load_template(path: &std::path::Path) -> Result<Template, Box<dyn std::error:
     }
 }
 
+fn write_wav_file(
+    path: &std::path::Path,
+    samples: &[f32],
+    sample_rate: u32,
+    channels: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut file = File::create(path)?;
+    let channels = channels.max(1) as u16;
+    let bits_per_sample = 16u16;
+    let block_align = channels * (bits_per_sample / 8);
+    let byte_rate = sample_rate * block_align as u32;
+    let data_len = (samples.len() * 2) as u32;
+    let file_len = 36 + data_len;
+
+    file.write_all(b"RIFF")?;
+    file.write_all(&file_len.to_le_bytes())?;
+    file.write_all(b"WAVE")?;
+    file.write_all(b"fmt ")?;
+    file.write_all(&16u32.to_le_bytes())?;
+    file.write_all(&1u16.to_le_bytes())?;
+    file.write_all(&channels.to_le_bytes())?;
+    file.write_all(&sample_rate.to_le_bytes())?;
+    file.write_all(&byte_rate.to_le_bytes())?;
+    file.write_all(&block_align.to_le_bytes())?;
+    file.write_all(&bits_per_sample.to_le_bytes())?;
+    file.write_all(b"data")?;
+    file.write_all(&data_len.to_le_bytes())?;
+
+    for &sample in samples {
+        let val = (sample.clamp(-1.0, 1.0) * 32767.0) as i16;
+        file.write_all(&val.to_le_bytes())?;
+    }
+
+    file.flush()?;
+    Ok(())
+}
+
 use clap::{Args, Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressStyle};
+use openviz_core::audio::effects::{process_audio_buffer, AudioEffectConfig};
 use openviz_core::audio::AudioAnalyzer;
 use openviz_core::player::decoder::decode_file;
 use openviz_core::render::OffscreenRenderer;
@@ -76,6 +114,26 @@ struct ExportArgs {
     /// Video bitrate
     #[arg(long, default_value = "12M")]
     bitrate: String,
+
+    /// Slowed + Reverb audio effect preset
+    #[arg(long, default_value_t = false)]
+    slowed: bool,
+
+    /// Nightcore / Sped-Up audio effect preset
+    #[arg(long, default_value_t = false)]
+    nightcore: bool,
+
+    /// Bass boost gain in dB
+    #[arg(long)]
+    bass_boost: Option<f32>,
+
+    /// Custom reverb wet mix (0.0 to 1.0)
+    #[arg(long)]
+    reverb: Option<f32>,
+
+    /// Enable 8D rotating audio panning
+    #[arg(long, default_value_t = false)]
+    eight_d: bool,
 }
 
 #[derive(Args, Debug)]
@@ -244,16 +302,71 @@ fn run_info(args: InfoArgs) -> Result<(), Box<dyn std::error::Error>> {
 
 fn run_export(args: ExportArgs) -> Result<(), Box<dyn std::error::Error>> {
     // 1. Load and decode audio
-    let track = decode_file(&args.audio)?;
+    let mut track = decode_file(&args.audio)?;
 
-    // 2. Load template (supports .ovz JSON and .viz Avee packages)
+    // 2. Configure audio effects
+    let mut effect_config = AudioEffectConfig::default();
+    if args.slowed {
+        effect_config = AudioEffectConfig::slowed_reverb();
+    }
+    if args.nightcore {
+        effect_config = AudioEffectConfig::nightcore();
+    }
+    if let Some(db) = args.bass_boost {
+        effect_config.bass_boost_db = db;
+    }
+    if let Some(reverb) = args.reverb {
+        effect_config.reverb_wet = reverb;
+    }
+    if args.eight_d {
+        effect_config.enable_8d = true;
+    }
+
+    // Process PCM stream through DSP effects chain
+    let (processed_samples, effective_sample_rate) = process_audio_buffer(
+        &track.samples,
+        track.sample_rate,
+        track.channels,
+        &effect_config,
+    );
+    track.samples = processed_samples;
+    track.sample_rate = effective_sample_rate;
+    track.duration_seconds =
+        track.samples.len() as f64 / (track.channels.max(1) as f64 * track.sample_rate as f64);
+
+    let is_modified = args.slowed
+        || args.nightcore
+        || args.bass_boost.is_some()
+        || args.reverb.is_some()
+        || args.eight_d;
+
+    let temp_audio_path = if is_modified {
+        let temp_path =
+            std::env::temp_dir().join(format!("openviz_temp_audio_{}.wav", std::process::id()));
+        write_wav_file(
+            &temp_path,
+            &track.samples,
+            track.sample_rate,
+            track.channels,
+        )?;
+        Some(temp_path)
+    } else {
+        None
+    };
+
+    let audio_input_arg = temp_audio_path
+        .as_ref()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| args.audio.clone());
+
+    // 3. Load template (supports .ovz JSON and .viz Avee packages)
     let template = load_template(&args.template)?;
 
-    // 3. Calculate total frames
+    // 4. Calculate total frames
     let fps = args.fps.max(1);
     let total_frames = (track.duration_seconds * fps as f64).ceil() as usize;
 
-    // 4. Check FFmpeg availability
+    // 5. Check FFmpeg availability
     let ffmpeg_check = Command::new("ffmpeg").arg("-version").output();
     if ffmpeg_check.is_err() || !ffmpeg_check.as_ref().unwrap().status.success() {
         eprintln!("Error: FFmpeg is not available on your system PATH.");
@@ -261,7 +374,7 @@ fn run_export(args: ExportArgs) -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     }
 
-    // 5. Spawn ffmpeg subprocess
+    // 6. Spawn ffmpeg subprocess
     let mut ffmpeg_cmd = Command::new("ffmpeg");
     ffmpeg_cmd
         .arg("-y")
@@ -276,7 +389,7 @@ fn run_export(args: ExportArgs) -> Result<(), Box<dyn std::error::Error>> {
         .arg("-i")
         .arg("-")
         .arg("-i")
-        .arg(&args.audio)
+        .arg(&audio_input_arg)
         .arg("-c:v")
         .arg("libx264")
         .arg("-preset")
@@ -303,11 +416,11 @@ fn run_export(args: ExportArgs) -> Result<(), Box<dyn std::error::Error>> {
         .take()
         .ok_or("Failed to open stdin for FFmpeg subprocess")?;
 
-    // 6. Initialize renderer and analyzer
+    // 7. Initialize renderer and analyzer
     let mut renderer = OffscreenRenderer::new(args.width, args.height)?;
     let mut analyzer = AudioAnalyzer::new(track.sample_rate, 2048);
 
-    // 7. Setup progress bar
+    // 8. Setup progress bar
     let pb = ProgressBar::new(total_frames as u64);
     pb.set_style(
         ProgressStyle::default_bar()
@@ -320,7 +433,7 @@ fn run_export(args: ExportArgs) -> Result<(), Box<dyn std::error::Error>> {
     let channels = track.channels.max(1);
     let dt = 1.0 / fps as f32;
 
-    // 8. Offline video render loop
+    // 9. Offline video render loop
     for frame in 0..total_frames {
         let t = frame as f64 / fps as f64;
         let center_sample = (t * sample_rate) as usize;
@@ -365,6 +478,10 @@ fn run_export(args: ExportArgs) -> Result<(), Box<dyn std::error::Error>> {
 
     let status = ffmpeg_proc.wait()?;
     pb.finish_with_message("Export complete");
+
+    if let Some(ref temp_path) = temp_audio_path {
+        let _ = std::fs::remove_file(temp_path);
+    }
 
     if !status.success() {
         return Err(format!("FFmpeg process exited with status: {}", status).into());
