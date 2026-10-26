@@ -1,3 +1,20 @@
+fn load_template(path: &std::path::Path) -> Result<Template, Box<dyn std::error::Error>> {
+    let is_viz = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.eq_ignore_ascii_case("viz"))
+        .unwrap_or(false);
+
+    if is_viz {
+        let template = openviz_core::template::import_viz(path)?;
+        Ok(template)
+    } else {
+        let json_str = std::fs::read_to_string(path)?;
+        let template = Template::from_json(&json_str)?;
+        Ok(template)
+    }
+}
+
 use clap::{Args, Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressStyle};
 use openviz_core::audio::AudioAnalyzer;
@@ -193,8 +210,7 @@ fn run_info(args: InfoArgs) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if let Some(ref template_path) = args.template {
-        let json_str = std::fs::read_to_string(template_path)?;
-        let template = Template::from_json(&json_str)?;
+        let template = load_template(template_path)?;
 
         let (total_nodes, layers) = count_nodes(&template.root);
 
@@ -230,9 +246,8 @@ fn run_export(args: ExportArgs) -> Result<(), Box<dyn std::error::Error>> {
     // 1. Load and decode audio
     let track = decode_file(&args.audio)?;
 
-    // 2. Load template JSON
-    let template_json = std::fs::read_to_string(&args.template)?;
-    let template = Template::from_json(&template_json)?;
+    // 2. Load template (supports .ovz JSON and .viz Avee packages)
+    let template = load_template(&args.template)?;
 
     // 3. Calculate total frames
     let fps = args.fps.max(1);

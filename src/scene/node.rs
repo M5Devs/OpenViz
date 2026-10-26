@@ -31,6 +31,9 @@ pub enum NodeType {
         font_asset_id: Option<String>,
         size: f32,
     },
+    Unsupported {
+        raw: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
