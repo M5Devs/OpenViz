@@ -1,3 +1,6 @@
+pub mod avee;
+
+pub use avee::{import_viz, AveeImportError};
 use serde::{Deserialize, Serialize};
 
 use crate::scene::node::SceneNode;
