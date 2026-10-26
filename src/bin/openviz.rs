@@ -83,6 +83,8 @@ enum Commands {
     GenerateTemplate(GenerateTemplateArgs),
     /// Print metadata and summary for template or audio file
     Info(InfoArgs),
+    /// Start interactive Web Studio server GUI
+    Serve(ServeArgs),
 }
 
 #[derive(Args, Debug)]
@@ -99,70 +101,90 @@ struct ExportArgs {
     #[arg(short = 'o', long, default_value = "output.mp4")]
     output: PathBuf,
 
-    /// Video width
-    #[arg(long, default_value_t = 1920)]
+    /// Video width in pixels
+    #[arg(long, default_value = "1920")]
     width: u32,
 
-    /// Video height
-    #[arg(long, default_value_t = 1080)]
+    /// Video height in pixels
+    #[arg(long, default_value = "1080")]
     height: u32,
 
-    /// Frame rate
-    #[arg(long, default_value_t = 60)]
+    /// Target frame rate (FPS)
+    #[arg(long, default_value = "60")]
     fps: u32,
 
-    /// Video bitrate
-    #[arg(long, default_value = "12M")]
+    /// Output video bitrate (e.g., 8M, 15M)
+    #[arg(long, default_value = "10M")]
     bitrate: String,
 
-    /// Slowed + Reverb audio effect preset
-    #[arg(long, default_value_t = false)]
+    /// Enable slowed + reverb DSP effect preset
+    #[arg(long)]
     slowed: bool,
 
-    /// Nightcore / Sped-Up audio effect preset
-    #[arg(long, default_value_t = false)]
+    /// Enable nightcore DSP effect preset
+    #[arg(long)]
     nightcore: bool,
 
-    /// Bass boost gain in dB
+    /// Apply bass boost in dB (e.g., 6.0)
     #[arg(long)]
     bass_boost: Option<f32>,
 
-    /// Custom reverb wet mix (0.0 to 1.0)
+    /// Apply custom room reverb wet level (0.0 to 1.0)
     #[arg(long)]
     reverb: Option<f32>,
 
-    /// Enable 8D rotating audio panning
-    #[arg(long, default_value_t = false)]
+    /// Enable 8D audio auto-panner effect
+    #[arg(long)]
     eight_d: bool,
 }
 
 #[derive(Args, Debug)]
 struct GenerateTemplateArgs {
-    /// Output template file path
-    #[arg(short = 'o', long, default_value = "demo.ovz")]
+    /// Output template JSON file path
+    #[arg(short = 'o', long, default_value = "template.ovz")]
     output: PathBuf,
 }
 
 #[derive(Args, Debug)]
 struct InfoArgs {
-    /// Path to template file
-    #[arg(long)]
+    /// Path to template file (.ovz or .viz)
+    #[arg(short = 't', long)]
     template: Option<PathBuf>,
 
     /// Path to audio file
-    #[arg(long)]
+    #[arg(short = 'a', long)]
     audio: Option<PathBuf>,
+}
+
+#[derive(Args, Debug)]
+struct ServeArgs {
+    /// Port to listen on
+    #[arg(short = 'p', long, default_value_t = 8080)]
+    port: u16,
+
+    /// Host IP address to bind to
+    #[arg(short = 'H', long, default_value = "0.0.0.0")]
+    host: String,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::GenerateTemplate(args) => run_generate_template(args)?,
-        Commands::Info(args) => run_info(args)?,
-        Commands::Export(args) => run_export(args)?,
+        Commands::Export(args) => run_export(args),
+        Commands::GenerateTemplate(args) => run_generate_template(args),
+        Commands::Info(args) => run_info(args),
+        Commands::Serve(args) => run_serve(args),
     }
+}
 
+fn run_serve(args: ServeArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async {
+        openviz_core::server::run_server(&args.host, args.port)
+            .await
+            .map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })
+    })?;
     Ok(())
 }
 
@@ -301,10 +323,8 @@ fn run_info(args: InfoArgs) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn run_export(args: ExportArgs) -> Result<(), Box<dyn std::error::Error>> {
-    // 1. Load and decode audio
     let mut track = decode_file(&args.audio)?;
 
-    // 2. Configure audio effects
     let mut effect_config = AudioEffectConfig::default();
     if args.slowed {
         effect_config = AudioEffectConfig::slowed_reverb();
@@ -322,7 +342,6 @@ fn run_export(args: ExportArgs) -> Result<(), Box<dyn std::error::Error>> {
         effect_config.enable_8d = true;
     }
 
-    // Process PCM stream through DSP effects chain
     let (processed_samples, effective_sample_rate) = process_audio_buffer(
         &track.samples,
         track.sample_rate,
@@ -359,14 +378,11 @@ fn run_export(args: ExportArgs) -> Result<(), Box<dyn std::error::Error>> {
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| args.audio.clone());
 
-    // 3. Load template (supports .ovz JSON and .viz Avee packages)
     let template = load_template(&args.template)?;
 
-    // 4. Calculate total frames
     let fps = args.fps.max(1);
     let total_frames = (track.duration_seconds * fps as f64).ceil() as usize;
 
-    // 5. Check FFmpeg availability
     let ffmpeg_check = Command::new("ffmpeg").arg("-version").output();
     if ffmpeg_check.is_err() || !ffmpeg_check.as_ref().unwrap().status.success() {
         eprintln!("Error: FFmpeg is not available on your system PATH.");
@@ -374,7 +390,6 @@ fn run_export(args: ExportArgs) -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     }
 
-    // 6. Spawn ffmpeg subprocess
     let mut ffmpeg_cmd = Command::new("ffmpeg");
     ffmpeg_cmd
         .arg("-y")
@@ -416,11 +431,9 @@ fn run_export(args: ExportArgs) -> Result<(), Box<dyn std::error::Error>> {
         .take()
         .ok_or("Failed to open stdin for FFmpeg subprocess")?;
 
-    // 7. Initialize renderer and analyzer
     let mut renderer = OffscreenRenderer::new(args.width, args.height)?;
     let mut analyzer = AudioAnalyzer::new(track.sample_rate, 2048);
 
-    // 8. Setup progress bar
     let pb = ProgressBar::new(total_frames as u64);
     pb.set_style(
         ProgressStyle::default_bar()
@@ -433,14 +446,12 @@ fn run_export(args: ExportArgs) -> Result<(), Box<dyn std::error::Error>> {
     let channels = track.channels.max(1);
     let dt = 1.0 / fps as f32;
 
-    // 9. Offline video render loop
     for frame in 0..total_frames {
         let t = frame as f64 / fps as f64;
         let center_sample = (t * sample_rate) as usize;
         let start_sample = center_sample.saturating_sub(window_size / 2);
         let end_sample = (start_sample + window_size).min(track.samples.len() / channels);
 
-        // Extract PCM window (convert interleaved to mono if multi-channel)
         let mut window = Vec::with_capacity(window_size);
         for s_idx in start_sample..end_sample {
             if channels == 1 {
@@ -457,7 +468,6 @@ fn run_export(args: ExportArgs) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        // Pad if window is shorter than 2048
         if window.len() < window_size {
             window.resize(window_size, 0.0);
         }

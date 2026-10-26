@@ -1,0 +1,944 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-[#0b0d13] text-gray-100 font-sans">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenViz Pro Studio</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        dark: {
+                            900: '#0b0d13',
+                            800: '#131722',
+                            700: '#1c2130',
+                            600: '#262d40',
+                        },
+                        cyan: {
+                            glow: '#00e5ff',
+                        },
+                        magenta: {
+                            glow: '#ff2a85',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- Lucide Icons CDN -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        .glass {
+            background: rgba(19, 23, 34, 0.75);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        .glass-cyan {
+            border-color: rgba(0, 229, 255, 0.4);
+            box-shadow: 0 0 15px rgba(0, 229, 255, 0.15);
+        }
+        /* Custom scrollbars */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: rgba(11, 13, 19, 0.5);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.15);
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(0, 229, 255, 0.4);
+        }
+    </style>
+</head>
+<body class="h-full flex flex-col overflow-hidden select-none">
+
+    <!-- HEADER BAR -->
+    <header class="h-14 glass border-b border-white/10 px-4 flex items-center justify-between shrink-0 z-20">
+        <div class="flex items-center space-x-3">
+            <div class="w-9 h-9 rounded-lg bg-gradient-to-br from-[#00e5ff] to-[#ff2a85] p-[1px] shadow-lg shadow-cyan-glow/20">
+                <div class="w-full h-full bg-dark-900 rounded-[7px] flex items-center justify-center">
+                    <i data-lucide="activity" class="w-5 h-5 text-[#00e5ff]"></i>
+                </div>
+            </div>
+            <div>
+                <div class="flex items-center space-x-2">
+                    <span class="font-bold text-lg tracking-wider bg-clip-text text-transparent bg-gradient-to-r from-white via-slate-200 to-[#00e5ff]">OpenViz</span>
+                    <span class="text-[10px] font-semibold uppercase tracking-widest px-1.5 py-0.5 rounded bg-[#ff2a85]/20 text-[#ff2a85] border border-[#ff2a85]/30">Studio</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex items-center space-x-3">
+            <input type="text" id="project-name" value="Default Spectrum" class="bg-dark-800/80 border border-white/10 rounded px-3 py-1 text-sm focus:outline-none focus:border-[#00e5ff] text-slate-200 w-48 transition-all">
+        </div>
+
+        <div class="flex items-center space-x-2">
+            <label for="import-viz-input" class="px-3 py-1.5 rounded-lg bg-dark-800 hover:bg-dark-700 border border-white/10 text-xs font-medium cursor-pointer transition flex items-center space-x-1.5 text-slate-300 hover:text-white">
+                <i data-lucide="file-up" class="w-4 h-4 text-[#00e5ff]"></i>
+                <span>Import .viz</span>
+                <input type="file" id="import-viz-input" accept=".viz" class="hidden">
+            </label>
+
+            <button id="btn-save-ovz" class="px-3 py-1.5 rounded-lg bg-dark-800 hover:bg-dark-700 border border-white/10 text-xs font-medium transition flex items-center space-x-1.5 text-slate-300 hover:text-white">
+                <i data-lucide="save" class="w-4 h-4 text-emerald-400"></i>
+                <span>Save .ovz</span>
+            </button>
+
+            <button id="btn-export-video" class="px-4 py-1.5 rounded-lg bg-gradient-to-r from-[#00e5ff] to-[#ff2a85] text-dark-900 font-bold text-xs tracking-wide shadow-lg shadow-cyan-glow/20 hover:opacity-95 transition flex items-center space-x-1.5">
+                <i data-lucide="rocket" class="w-4 h-4"></i>
+                <span>Export Video (MP4)</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- MAIN 3-PANEL LAYOUT -->
+    <div class="flex-1 flex overflow-hidden">
+
+        <!-- LEFT PANEL: Scene Tree & DSP Effects -->
+        <aside class="w-80 glass border-r border-white/10 flex flex-col shrink-0 z-10">
+            <!-- Layers Header -->
+            <div class="p-3 border-b border-white/10 flex items-center justify-between">
+                <div class="flex items-center space-x-2">
+                    <i data-lucide="layers" class="w-4 h-4 text-[#00e5ff]"></i>
+                    <span class="text-xs font-bold uppercase tracking-wider text-slate-300">Scene Hierarchy</span>
+                </div>
+            </div>
+
+            <!-- Add Layer Buttons -->
+            <div class="p-2 border-b border-white/10 grid grid-cols-3 gap-1 bg-dark-900/50">
+                <button id="btn-add-image" class="px-2 py-1.5 rounded bg-dark-800 hover:bg-dark-700 border border-white/10 text-[11px] font-medium transition flex items-center justify-center space-x-1 text-slate-300">
+                    <i data-lucide="image" class="w-3.5 h-3.5 text-cyan-400"></i>
+                    <span>+ Image</span>
+                </button>
+                <button id="btn-add-bars" class="px-2 py-1.5 rounded bg-dark-800 hover:bg-dark-700 border border-white/10 text-[11px] font-medium transition flex items-center justify-center space-x-1 text-slate-300">
+                    <i data-lucide="bar-chart-2" class="w-3.5 h-3.5 text-magenta-glow"></i>
+                    <span>+ Spectrum</span>
+                </button>
+                <button id="btn-add-text" class="px-2 py-1.5 rounded bg-dark-800 hover:bg-dark-700 border border-white/10 text-[11px] font-medium transition flex items-center justify-center space-x-1 text-slate-300">
+                    <i data-lucide="type" class="w-3.5 h-3.5 text-amber-400"></i>
+                    <span>+ Text</span>
+                </button>
+            </div>
+
+            <!-- Scene Node Tree Container -->
+            <div id="scene-tree" class="flex-1 overflow-y-auto p-2 space-y-1">
+                <!-- Tree items injected by JavaScript -->
+            </div>
+
+            <!-- AUDIO DSP EFFECTS PANEL -->
+            <div class="border-t border-white/10 p-3 bg-dark-900/80">
+                <div class="flex items-center space-x-2 mb-3">
+                    <i data-lucide="sliders" class="w-4 h-4 text-[#ff2a85]"></i>
+                    <span class="text-xs font-bold uppercase tracking-wider text-slate-300">Audio DSP Effects</span>
+                </div>
+                <div class="space-y-2.5 text-xs text-slate-300">
+                    <label class="flex items-center justify-between p-2 rounded bg-dark-800/80 border border-white/5 hover:border-white/10 cursor-pointer">
+                        <span class="flex items-center space-x-2">
+                            <span>🌌</span>
+                            <span>Slowed + Reverb</span>
+                        </span>
+                        <input type="checkbox" id="fx-slowed" class="accent-[#00e5ff] w-4 h-4 rounded">
+                    </label>
+
+                    <div class="p-2 rounded bg-dark-800/80 border border-white/5 space-y-1.5">
+                        <div class="flex items-center justify-between">
+                            <span class="flex items-center space-x-2">
+                                <span>💣</span>
+                                <span>Bass Boost</span>
+                            </span>
+                            <span id="fx-bass-boost-val" class="text-[10px] font-mono text-[#00e5ff]">0 dB</span>
+                        </div>
+                        <input type="range" id="fx-bass-boost" min="0" max="18" step="0.5" value="0" class="w-full accent-[#00e5ff] h-1.5 bg-dark-700 rounded-lg appearance-none cursor-pointer">
+                    </div>
+
+                    <label class="flex items-center justify-between p-2 rounded bg-dark-800/80 border border-white/5 hover:border-white/10 cursor-pointer">
+                        <span class="flex items-center space-x-2">
+                            <span>⚡</span>
+                            <span>Nightcore</span>
+                        </span>
+                        <input type="checkbox" id="fx-nightcore" class="accent-[#ff2a85] w-4 h-4 rounded">
+                    </label>
+
+                    <label class="flex items-center justify-between p-2 rounded bg-dark-800/80 border border-white/5 hover:border-white/10 cursor-pointer">
+                        <span class="flex items-center space-x-2">
+                            <span>🎧</span>
+                            <span>8D Audio Panner</span>
+                        </span>
+                        <input type="checkbox" id="fx-8d" class="accent-[#00e5ff] w-4 h-4 rounded">
+                    </label>
+                </div>
+            </div>
+        </aside>
+
+        <!-- CENTER PANEL: Interactive Viewport -->
+        <main class="flex-1 bg-dark-900 relative flex flex-col items-center justify-center p-4 overflow-hidden">
+            <!-- Viewport Overlay Info -->
+            <div class="absolute top-4 left-4 z-10 flex items-center space-x-2">
+                <span class="text-[11px] font-mono px-2.5 py-1 rounded-md bg-dark-800/90 border border-white/10 text-slate-400">1920 &times; 1080 (16:9)</span>
+                <span id="viewport-[#00e5ff]-tag" class="text-[11px] font-mono px-2 py-1 rounded-md bg-[#00e5ff]/10 border border-[#00e5ff]/30 text-[#00e5ff]">Interactive Gizmo Active</span>
+            </div>
+
+            <!-- HTML5 CANVAS VIEWPORT -->
+            <div class="relative shadow-2xl rounded-lg overflow-hidden border border-white/10 max-w-full max-h-full flex items-center justify-center bg-black">
+                <canvas id="viewport-canvas" width="1920" height="1080" class="w-full h-auto max-h-[70vh] aspect-video object-contain cursor-crosshair"></canvas>
+            </div>
+        </main>
+
+        <!-- RIGHT PANEL: Inspector -->
+        <aside class="w-80 glass border-l border-white/10 flex flex-col shrink-0 z-10">
+            <div class="p-3 border-b border-white/10 flex items-center justify-between">
+                <div class="flex items-center space-x-2">
+                    <i data-lucide="settings" class="w-4 h-4 text-[#ff2a85]"></i>
+                    <span class="text-xs font-bold uppercase tracking-wider text-slate-300">Inspector Properties</span>
+                </div>
+            </div>
+
+            <div id="inspector-content" class="flex-1 overflow-y-auto p-4 space-y-4 text-xs text-slate-300">
+                <!-- Injected dynamically by JS -->
+                <div class="text-slate-500 italic text-center py-8">Select an element to edit properties</div>
+            </div>
+        </aside>
+    </div>
+
+    <!-- BOTTOM TRANSPORT BAR -->
+    <footer class="h-20 glass border-t border-white/10 px-4 flex items-center justify-between shrink-0 z-20 space-x-4">
+        <!-- Audio Drag & Drop Zone -->
+        <div id="drop-zone" class="w-64 h-14 rounded-lg border border-dashed border-white/20 hover:border-[#00e5ff] bg-dark-800/50 hover:bg-dark-800 flex items-center justify-center p-2 text-center cursor-pointer transition">
+            <div class="flex items-center space-x-2 text-slate-400">
+                <i data-lucide="upload-cloud" class="w-5 h-5 text-[#00e5ff]"></i>
+                <div class="text-left">
+                    <p id="audio-filename" class="text-[11px] font-semibold text-slate-200 truncate w-40">Drop MP3 or Cover Art</p>
+                    <p class="text-[9px] text-slate-500">Audio / Assets Auto-Upload</p>
+                </div>
+            </div>
+            <input type="file" id="audio-file-input" accept="audio/*,image/*" class="hidden">
+        </div>
+
+        <!-- Playback Controls & Waveform Scrubber -->
+        <div class="flex-1 flex flex-col items-center justify-center max-w-2xl px-4">
+            <div class="flex items-center space-x-4 mb-1">
+                <button id="btn-play-pause" class="w-9 h-9 rounded-full bg-gradient-to-br from-[#00e5ff] to-[#ff2a85] text-dark-900 flex items-center justify-center font-bold hover:scale-105 transition shadow-lg shadow-cyan-glow/20">
+                    <i data-lucide="play" class="w-5 h-5 fill-current"></i>
+                </button>
+                <span id="time-display" class="font-mono text-xs text-slate-400">00:00 / 00:00</span>
+            </div>
+            <input type="range" id="scrubber" min="0" max="100" value="0" step="0.1" class="w-full accent-[#00e5ff] h-1.5 bg-dark-700 rounded-lg appearance-none cursor-pointer">
+        </div>
+
+        <!-- Volume Control -->
+        <div class="w-44 flex items-center space-x-2">
+            <i data-lucide="volume-2" class="w-4 h-4 text-slate-400"></i>
+            <input type="range" id="volume-slider" min="0" max="1" step="0.01" value="0.8" class="w-full accent-[#00e5ff] h-1.5 bg-dark-700 rounded-lg appearance-none cursor-pointer">
+        </div>
+    </footer>
+
+    <!-- EXPORT MODAL -->
+    <div id="export-modal" class="fixed inset-0 bg-black/80 backdrop-blur-md hidden z-50 flex items-center justify-center">
+        <div class="glass glass-cyan w-[420px] rounded-xl p-6 shadow-2xl space-y-4">
+            <div class="flex items-center justify-between border-b border-white/10 pb-3">
+                <div class="flex items-center space-x-2">
+                    <i data-lucide="film" class="w-5 h-5 text-[#00e5ff]"></i>
+                    <h3 class="font-bold text-base text-white">Rendering MP4 Video</h3>
+                </div>
+                <button id="btn-close-modal" class="text-slate-400 hover:text-white"><i data-lucide="x" class="w-5 h-5"></i></button>
+            </div>
+
+            <div id="export-status-container" class="py-6 flex flex-col items-center justify-center space-y-3">
+                <div class="w-12 h-12 border-4 border-[#00e5ff]/30 border-t-[#00e5ff] rounded-full animate-spin"></div>
+                <p id="export-status-text" class="text-sm font-medium text-slate-300">Rendering video pipeline via FFmpeg...</p>
+            </div>
+
+            <div id="export-result-container" class="hidden flex flex-col items-center justify-center space-y-4">
+                <div class="w-12 h-12 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center border border-emerald-500/30">
+                    <i data-lucide="check" class="w-6 h-6"></i>
+                </div>
+                <p class="text-sm font-semibold text-emerald-300">Video Export Complete!</p>
+                <a id="btn-download-video" href="#" download class="w-full py-2.5 rounded-lg bg-gradient-to-r from-[#00e5ff] to-[#ff2a85] text-dark-900 font-bold text-xs tracking-wider uppercase text-center shadow-lg shadow-cyan-glow/20 hover:opacity-95 transition">
+                    Download MP4 File
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- AUDIO ELEMENT & WEB AUDIO ENGINE -->
+    <audio id="audio-player" crossorigin="anonymous"></audio>
+
+    <script>
+        // --- STUDIO APPLICATION STATE ---
+        let currentTemplate = null;
+        let selectedNodeId = null;
+        let audioUploadedPath = null;
+        let audioContext = null;
+        let analyser = null;
+        let audioSource = null;
+        let audioFreqData = new Uint8Array(128);
+        let isPlaying = false;
+
+        // Interactive Transform Gizmo state
+        let gizmoDrag = null; // { mode: 'translate'|'scale'|'rotate', startX, startY, origPos, origScale, origRot }
+
+        const canvas = document.getElementById('viewport-canvas');
+        const ctx = canvas.getContext('2d');
+        const audioEl = document.getElementById('audio-player');
+
+        // --- INITIALIZATION ---
+        window.addEventListener('DOMContentLoaded', async () => {
+            lucide.createIcons();
+            await loadDefaultTemplate();
+            setupEventListeners();
+            requestAnimationFrame(renderLoop);
+        });
+
+        async function loadDefaultTemplate() {
+            try {
+                const res = await fetch('/api/templates/default');
+                currentTemplate = await res.json();
+                if (currentTemplate && currentTemplate.root) {
+                    if (currentTemplate.root.node_type.Group && currentTemplate.root.node_type.Group.children.length > 0) {
+                        selectedNodeId = currentTemplate.root.node_type.Group.children[0].id;
+                    } else {
+                        selectedNodeId = currentTemplate.root.id;
+                    }
+                }
+                renderTree();
+                renderInspector();
+            } catch (err) {
+                console.error('Failed loading default template:', err);
+            }
+        }
+
+        // --- TREE VIEW RENDERING ---
+        function renderTree() {
+            const container = document.getElementById('scene-tree');
+            container.innerHTML = '';
+            if (!currentTemplate || !currentTemplate.root) return;
+
+            function buildNodeUI(node, depth = 0) {
+                const isSelected = node.id === selectedNodeId;
+                const div = document.createElement('div');
+                div.className = `flex items-center justify-between p-2 rounded-md cursor-pointer text-xs transition border ${
+                    isSelected ? 'bg-[#00e5ff]/15 border-[#00e5ff]/50 text-white font-medium' : 'bg-dark-800/60 border-white/5 hover:border-white/10 text-slate-300'
+                }`;
+                div.style.marginLeft = `${depth * 12}px`;
+
+                let iconName = 'layers';
+                let typeName = 'Group';
+                if (node.node_type.Image) { iconName = 'image'; typeName = 'Image'; }
+                if (node.node_type.Bars) { iconName = 'bar-chart-2'; typeName = 'Spectrum'; }
+                if (node.node_type.Text) { iconName = 'type'; typeName = 'Text'; }
+
+                div.innerHTML = `
+                    <div class="flex items-center space-x-2 truncate">
+                        <i data-lucide="${iconName}" class="w-3.5 h-3.5 ${isSelected ? 'text-[#00e5ff]' : 'text-slate-400'}"></i>
+                        <span class="truncate">${node.id}</span>
+                    </div>
+                    <span class="text-[10px] text-slate-500 font-mono">${typeName}</span>
+                `;
+
+                div.onclick = (e) => {
+                    e.stopPropagation();
+                    selectedNodeId = node.id;
+                    renderTree();
+                    renderInspector();
+                };
+
+                container.appendChild(div);
+
+                if (node.node_type.Group && node.node_type.Group.children) {
+                    node.node_type.Group.children.forEach(child => buildNodeUI(child, depth + 1));
+                }
+            }
+
+            buildNodeUI(currentTemplate.root);
+            lucide.createIcons();
+        }
+
+        function findNode(node, id) {
+            if (node.id === id) return node;
+            if (node.node_type.Group && node.node_type.Group.children) {
+                for (const child of node.node_type.Group.children) {
+                    const found = findNode(child, id);
+                    if (found) return found;
+                }
+            }
+            return null;
+        }
+
+        // --- INSPECTOR PROPERTIES PANEL ---
+        function renderInspector() {
+            const container = document.getElementById('inspector-content');
+            container.innerHTML = '';
+
+            if (!selectedNodeId || !currentTemplate) {
+                container.innerHTML = `<div class="text-slate-500 italic text-center py-8">Select an element to edit properties</div>`;
+                return;
+            }
+
+            const node = findNode(currentTemplate.root, selectedNodeId);
+            if (!node) return;
+
+            const transform = node.transform || { position: [0,0], scale: [1,1], rotation: 0, opacity: 1 };
+
+            let typeSpecificHTML = '';
+            if (node.node_type.Bars) {
+                const b = node.node_type.Bars;
+                typeSpecificHTML = `
+                    <div class="space-y-2 pt-2 border-t border-white/10">
+                        <label class="font-semibold text-slate-200 block text-[11px] uppercase tracking-wider">Spectrum Bars Setup</label>
+                        <div class="grid grid-cols-2 gap-2">
+                            <div>
+                                <span class="text-[10px] text-slate-400">Count</span>
+                                <input type="number" id="inp-bar-count" value="${b.count}" class="w-full bg-dark-800 border border-white/10 rounded px-2 py-1 text-slate-200">
+                            </div>
+                            <div>
+                                <span class="text-[10px] text-slate-400">Width</span>
+                                <input type="number" step="0.5" id="inp-bar-width" value="${b.width}" class="w-full bg-dark-800 border border-white/10 rounded px-2 py-1 text-slate-200">
+                            </div>
+                        </div>
+                        <div class="flex items-center justify-between pt-1">
+                            <span class="text-[10px] text-slate-400">Radial Layout</span>
+                            <input type="checkbox" id="inp-bar-radial" ${b.is_radial ? 'checked' : ''} class="accent-[#00e5ff] w-4 h-4">
+                        </div>
+                    </div>
+                `;
+            }
+
+            container.innerHTML = `
+                <div class="space-y-4">
+                    <div>
+                        <label class="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Element ID</label>
+                        <input type="text" id="inp-node-id" value="${node.id}" class="w-full bg-dark-800 border border-white/10 rounded px-2 py-1 text-slate-200 mt-1">
+                    </div>
+
+                    <div class="space-y-2 pt-2 border-t border-white/10">
+                        <label class="font-semibold text-slate-200 block text-[11px] uppercase tracking-wider">Transform</label>
+                        <div class="grid grid-cols-2 gap-2">
+                            <div>
+                                <span class="text-[10px] text-slate-400">Pos X</span>
+                                <input type="number" id="inp-pos-x" value="${transform.position[0]}" step="10" class="w-full bg-dark-800 border border-white/10 rounded px-2 py-1 text-slate-200">
+                            </div>
+                            <div>
+                                <span class="text-[10px] text-slate-400">Pos Y</span>
+                                <input type="number" id="inp-pos-y" value="${transform.position[1]}" step="10" class="w-full bg-dark-800 border border-white/10 rounded px-2 py-1 text-slate-200">
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-2">
+                            <div>
+                                <span class="text-[10px] text-slate-400">Scale X</span>
+                                <input type="number" id="inp-scale-x" value="${transform.scale[0]}" step="0.1" class="w-full bg-dark-800 border border-white/10 rounded px-2 py-1 text-slate-200">
+                            </div>
+                            <div>
+                                <span class="text-[10px] text-slate-400">Scale Y</span>
+                                <input type="number" id="inp-scale-y" value="${transform.scale[1]}" step="0.1" class="w-full bg-dark-800 border border-white/10 rounded px-2 py-1 text-slate-200">
+                            </div>
+                        </div>
+
+                        <div>
+                            <div class="flex justify-between text-[10px] text-slate-400">
+                                <span>Rotation</span>
+                                <span id="val-rotation">${Math.round(transform.rotation * (180/Math.PI))}&deg;</span>
+                            </div>
+                            <input type="range" id="inp-rotation" min="-3.14" max="3.14" step="0.05" value="${transform.rotation}" class="w-full accent-[#00e5ff] h-1.5 bg-dark-700 rounded appearance-none">
+                        </div>
+
+                        <div>
+                            <div class="flex justify-between text-[10px] text-slate-400">
+                                <span>Opacity</span>
+                                <span id="val-opacity">${Math.round(transform.opacity * 100)}%</span>
+                            </div>
+                            <input type="range" id="inp-opacity" min="0" max="1" step="0.05" value="${transform.opacity}" class="w-full accent-[#ff2a85] h-1.5 bg-dark-700 rounded appearance-none">
+                        </div>
+                    </div>
+
+                    ${typeSpecificHTML}
+
+                    <!-- AUDIO REACTIVITY BINDINGS -->
+                    <div class="space-y-2 pt-2 border-t border-white/10">
+                        <label class="font-semibold text-slate-200 block text-[11px] uppercase tracking-wider flex items-center justify-between">
+                            <span>Audio Reactivity</span>
+                            <span class="text-[9px] text-[#00e5ff] font-mono">DSP Live</span>
+                        </label>
+                        <div class="space-y-2 bg-dark-800/80 p-2.5 rounded border border-white/5">
+                            <div>
+                                <span class="text-[10px] text-slate-400">React To Audio Frequency</span>
+                                <select id="inp-bind-source" class="w-full bg-dark-900 border border-white/10 rounded px-2 py-1 text-xs text-slate-200 mt-0.5">
+                                    <option value="Bass">Bass (20 - 250 Hz)</option>
+                                    <option value="Mid">Mid (250 - 4 kHz)</option>
+                                    <option value="High">High (4 k - 20 kHz)</option>
+                                    <option value="Beat">Beat Pulse</option>
+                                </select>
+                            </div>
+                            <div>
+                                <span class="text-[10px] text-slate-400">Target Property</span>
+                                <select id="inp-bind-target" class="w-full bg-dark-900 border border-white/10 rounded px-2 py-1 text-xs text-slate-200 mt-0.5">
+                                    <option value="ScaleUniform">Scale (Pulse)</option>
+                                    <option value="BarHeight">Spectrum Height</option>
+                                    <option value="Opacity">Opacity Flash</option>
+                                    <option value="Rotation">Rotation Wobble</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            // Attach event listeners for real-time inspector updates
+            document.getElementById('inp-node-id').onchange = (e) => { node.id = e.target.value; selectedNodeId = node.id; renderTree(); };
+            document.getElementById('inp-pos-x').oninput = (e) => { node.transform.position[0] = parseFloat(e.target.value) || 0; };
+            document.getElementById('inp-pos-y').oninput = (e) => { node.transform.position[1] = parseFloat(e.target.value) || 0; };
+            document.getElementById('inp-scale-x').oninput = (e) => { node.transform.scale[0] = parseFloat(e.target.value) || 1; };
+            document.getElementById('inp-scale-y').oninput = (e) => { node.transform.scale[1] = parseFloat(e.target.value) || 1; };
+            document.getElementById('inp-rotation').oninput = (e) => {
+                node.transform.rotation = parseFloat(e.target.value) || 0;
+                document.getElementById('val-rotation').innerHTML = `${Math.round(node.transform.rotation * (180/Math.PI))}&deg;`;
+            };
+            document.getElementById('inp-opacity').oninput = (e) => {
+                node.transform.opacity = parseFloat(e.target.value) || 1;
+                document.getElementById('val-opacity').innerHTML = `${Math.round(node.transform.opacity * 100)}%`;
+            };
+
+            if (node.node_type.Bars) {
+                document.getElementById('inp-bar-count').onchange = (e) => { node.node_type.Bars.count = parseInt(e.target.value) || 32; };
+                document.getElementById('inp-bar-width').onchange = (e) => { node.node_type.Bars.width = parseFloat(e.target.value) || 2; };
+                document.getElementById('inp-bar-radial').onchange = (e) => { node.node_type.Bars.is_radial = e.target.checked; };
+            }
+        }
+
+        // --- CANVAS RENDER & INTERACTIVE TRANSFORM GIZMO ---
+        function getAudioEnergy(type) {
+            if (!analyser) return 0.2;
+            analyser.getByteFrequencyData(audioFreqData);
+            let sum = 0, count = 0;
+            if (type === 'Bass') { for(let i=0; i<15; i++) { sum+=audioFreqData[i]; count++; } }
+            else if (type === 'Mid') { for(let i=15; i<60; i++) { sum+=audioFreqData[i]; count++; } }
+            else if (type === 'High') { for(let i=60; i<120; i++) { sum+=audioFreqData[i]; count++; } }
+            else { for(let i=0; i<10; i++) { sum+=audioFreqData[i]; count++; } }
+            return (sum / (count * 255)) || 0.1;
+        }
+
+        function renderLoop() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // 1. Draw Background
+            ctx.fillStyle = '#050508';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            if (currentTemplate && currentTemplate.root) {
+                // 2. Render Scene Nodes
+                renderNode(currentTemplate.root);
+
+                // 3. Draw Interactive Transform Gizmo for selected element
+                if (selectedNodeId) {
+                    const selNode = findNode(currentTemplate.root, selectedNodeId);
+                    if (selNode) {
+                        drawGizmo(selNode);
+                    }
+                }
+            }
+
+            requestAnimationFrame(renderLoop);
+        }
+
+        function renderNode(node) {
+            ctx.save();
+            const pos = node.transform.position || [0,0];
+            const scale = node.transform.scale || [1,1];
+            const rot = node.transform.rotation || 0;
+            const opacity = node.transform.opacity ?? 1;
+
+            ctx.translate(canvas.width/2 + pos[0], canvas.height/2 + pos[1]);
+            ctx.rotate(rot);
+            ctx.scale(scale[0], scale[1]);
+            ctx.globalAlpha = opacity;
+
+            if (node.node_type.Image) {
+                ctx.fillStyle = '#1c2130';
+                ctx.strokeStyle = '#00e5ff';
+                ctx.lineWidth = 4;
+                ctx.beginPath();
+                ctx.arc(0, 0, 120, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+
+                ctx.fillStyle = '#00e5ff';
+                ctx.font = 'bold 24px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText('OPENVIZ', 0, 0);
+            } else if (node.node_type.Bars) {
+                const b = node.node_type.Bars;
+                const count = b.count || 64;
+                const radius = b.inner_radius ? b.inner_radius * 12 : 140;
+                const bassVal = getAudioEnergy('Bass');
+
+                if (b.is_radial) {
+                    for (let i = 0; i < count; i++) {
+                        const angle = (i / count) * Math.PI * 2;
+                        const barLen = 20 + (bassVal * 160 * (1 + (i % 5)*0.2));
+                        const x1 = Math.cos(angle) * radius;
+                        const y1 = Math.sin(angle) * radius;
+                        const x2 = Math.cos(angle) * (radius + barLen);
+                        const y2 = Math.sin(angle) * (radius + barLen);
+
+                        ctx.strokeStyle = i % 2 === 0 ? '#00e5ff' : '#ff2a85';
+                        ctx.lineWidth = b.width ? b.width * 2 : 4;
+                        ctx.beginPath();
+                        ctx.moveTo(x1, y1);
+                        ctx.lineTo(x2, y2);
+                        ctx.stroke();
+                    }
+                }
+            } else if (node.node_type.Text) {
+                ctx.fillStyle = '#ffffff';
+                ctx.font = 'bold 36px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText('OpenViz Studio', 0, 0);
+            } else if (node.node_type.Group && node.node_type.Group.children) {
+                node.node_type.Group.children.forEach(child => renderNode(child));
+            }
+
+            ctx.restore();
+        }
+
+        function drawGizmo(node) {
+            ctx.save();
+            const pos = node.transform.position || [0,0];
+            const scale = node.transform.scale || [1,1];
+            const rot = node.transform.rotation || 0;
+
+            const cx = canvas.width/2 + pos[0];
+            const cy = canvas.height/2 + pos[1];
+            const w = 300 * Math.abs(scale[0]);
+            const h = 300 * Math.abs(scale[1]);
+
+            ctx.translate(cx, cy);
+            ctx.rotate(rot);
+
+            // Bounding Box
+            ctx.strokeStyle = '#00e5ff';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([6, 4]);
+            ctx.strokeRect(-w/2, -h/2, w, h);
+            ctx.setLineDash([]);
+
+            // Corner Scale Handles
+            const corners = [
+                [-w/2, -h/2], [w/2, -h/2],
+                [w/2, h/2], [-w/2, h/2]
+            ];
+            corners.forEach(([x, y]) => {
+                ctx.fillStyle = '#ff2a85';
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(x, y, 7, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+            });
+
+            // Top Rotation Pin
+            ctx.strokeStyle = '#00e5ff';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(0, -h/2);
+            ctx.lineTo(0, -h/2 - 35);
+            ctx.stroke();
+
+            ctx.fillStyle = '#00e5ff';
+            ctx.beginPath();
+            ctx.arc(0, -h/2 - 35, 8, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+
+            ctx.restore();
+        }
+
+        // --- GIZMO INTERACTION EVENTS ---
+        canvas.addEventListener('mousedown', (e) => {
+            if (!selectedNodeId || !currentTemplate) return;
+            const selNode = findNode(currentTemplate.root, selectedNodeId);
+            if (!selNode) return;
+
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = ((e.clientX - rect.left) / rect.width) * canvas.width;
+            const mouseY = ((e.clientY - rect.top) / rect.height) * canvas.height;
+
+            const pos = selNode.transform.position || [0,0];
+            const scale = selNode.transform.scale || [1,1];
+            const rot = selNode.transform.rotation || 0;
+
+            const cx = canvas.width/2 + pos[0];
+            const cy = canvas.height/2 + pos[1];
+            const w = 300 * Math.abs(scale[0]);
+            const h = 300 * Math.abs(scale[1]);
+
+            // Transform mouse point into local node coordinate space
+            const dx = mouseX - cx;
+            const dy = mouseY - cy;
+            const localX = dx * Math.cos(-rot) - dy * Math.sin(-rot);
+            const localY = dx * Math.sin(-rot) + dy * Math.cos(-rot);
+
+            // Check Rotation Pin (-35px above top center)
+            const pinDist = Math.hypot(localX - 0, localY - (-h/2 - 35));
+            if (pinDist <= 12) {
+                gizmoDrag = { mode: 'rotate', startX: mouseX, startY: mouseY, origRot: rot, cx, cy };
+                return;
+            }
+
+            // Check Corner Scale Handles
+            const corners = [[-w/2, -h/2], [w/2, -h/2], [w/2, h/2], [-w/2, h/2]];
+            for (const [cx, cy] of corners) {
+                if (Math.hypot(localX - cx, localY - cy) <= 12) {
+                    gizmoDrag = { mode: 'scale', startX: mouseX, startY: mouseY, origScale: [...scale] };
+                    return;
+                }
+            }
+
+            // Check Inside Bounding Box (Translate)
+            if (Math.abs(localX) <= w/2 && Math.abs(localY) <= h/2) {
+                gizmoDrag = { mode: 'translate', startX: mouseX, startY: mouseY, origPos: [...pos] };
+            }
+        });
+
+        window.addEventListener('mousemove', (e) => {
+            if (!gizmoDrag || !selectedNodeId || !currentTemplate) return;
+            const selNode = findNode(currentTemplate.root, selectedNodeId);
+            if (!selNode) return;
+
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = ((e.clientX - rect.left) / rect.width) * canvas.width;
+            const mouseY = ((e.clientY - rect.top) / rect.height) * canvas.height;
+
+            if (gizmoDrag.mode === 'translate') {
+                const deltaX = mouseX - gizmoDrag.startX;
+                const deltaY = mouseY - gizmoDrag.startY;
+                selNode.transform.position[0] = Math.round(gizmoDrag.origPos[0] + deltaX);
+                selNode.transform.position[1] = Math.round(gizmoDrag.origPos[1] + deltaY);
+            } else if (gizmoDrag.mode === 'scale') {
+                const deltaX = (mouseX - gizmoDrag.startX) / 150;
+                selNode.transform.scale[0] = Math.max(0.1, parseFloat((gizmoDrag.origScale[0] + deltaX).toFixed(2)));
+                selNode.transform.scale[1] = Math.max(0.1, parseFloat((gizmoDrag.origScale[1] + deltaX).toFixed(2)));
+            } else if (gizmoDrag.mode === 'rotate') {
+                const angle = Math.atan2(mouseY - gizmoDrag.cy, mouseX - gizmoDrag.cx) + (Math.PI / 2);
+                selNode.transform.rotation = parseFloat(angle.toFixed(2));
+            }
+
+            renderInspector();
+        });
+
+        window.addEventListener('mouseup', () => { gizmoDrag = null; });
+
+        // --- BUTTON & EVENT HANDLERS ---
+        function setupEventListeners() {
+            // Add Layer buttons
+            document.getElementById('btn-add-image').onclick = () => addNode('Image');
+            document.getElementById('btn-add-bars').onclick = () => addNode('Bars');
+            document.getElementById('btn-add-text').onclick = () => addNode('Text');
+
+            // Import .viz
+            document.getElementById('import-viz-input').onchange = async (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const formData = new FormData();
+                formData.append('file', file);
+                try {
+                    const res = await fetch('/api/templates/import-viz', { method: 'POST', body: formData });
+                    if (!res.ok) throw new Error(await res.text());
+                    currentTemplate = await res.json();
+                    selectedNodeId = currentTemplate.root.id;
+                    renderTree();
+                    renderInspector();
+                } catch(err) {
+                    alert('Import .viz Error: ' + err.message);
+                }
+            };
+
+            // Save .ovz
+            document.getElementById('btn-save-ovz').onclick = () => {
+                if (!currentTemplate) return;
+                const blob = new Blob([JSON.stringify(currentTemplate, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'template.ovz';
+                a.click();
+                URL.revokeObjectURL(url);
+            };
+
+            // Export Video
+            document.getElementById('btn-export-video').onclick = async () => {
+                if (!audioUploadedPath) {
+                    alert('Please upload an audio file (MP3/WAV) before exporting video!');
+                    return;
+                }
+
+                const modal = document.getElementById('export-modal');
+                const statusContainer = document.getElementById('export-status-container');
+                const resultContainer = document.getElementById('export-result-container');
+
+                modal.classList.remove('hidden');
+                statusContainer.classList.remove('hidden');
+                resultContainer.classList.add('hidden');
+
+                const payload = {
+                    audio_path: audioUploadedPath,
+                    template: currentTemplate,
+                    effects: {
+                        slowed: document.getElementById('fx-slowed').checked,
+                        bass_boost_db: parseFloat(document.getElementById('fx-bass-boost').value) || null,
+                        nightcore: document.getElementById('fx-[#ff2a85]' || 'fx-nightcore').checked,
+                        eight_d: document.getElementById('fx-8d').checked
+                    },
+                    width: 1920,
+                    height: 1080,
+                    fps: 60
+                };
+
+                try {
+                    const res = await fetch('/api/export', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    if (!res.ok) throw new Error(await res.text());
+                    const data = await res.json();
+
+                    statusContainer.classList.add('hidden');
+                    resultContainer.classList.remove('hidden');
+                    document.getElementById('btn-download-video').href = data.download_url;
+                } catch (err) {
+                    alert('Export Video Failed: ' + err.message);
+                    modal.classList.add('hidden');
+                }
+            };
+
+            document.getElementById('btn-close-modal').onclick = () => {
+                document.getElementById('export-modal').classList.add('hidden');
+            };
+
+            // Audio Drag and Drop & Upload
+            const dropZone = document.getElementById('drop-zone');
+            const fileInput = document.getElementById('audio-file-input');
+
+            dropZone.onclick = () => fileInput.click();
+            fileInput.onchange = (e) => handleFileUpload(e.target.files[0]);
+
+            dropZone.ondragover = (e) => { e.preventDefault(); dropZone.classList.add('border-[#00e5ff]'); };
+            dropZone.ondragleave = () => dropZone.classList.remove('border-[#00e5ff]');
+            dropZone.ondrop = (e) => {
+                e.preventDefault();
+                dropZone.classList.remove('border-[#00e5ff]');
+                if (e.dataTransfer.files.length > 0) handleFileUpload(e.dataTransfer.files[0]);
+            };
+
+            // Bass boost slider UI text update
+            document.getElementById('fx-bass-boost').oninput = (e) => {
+                document.getElementById('fx-bass-boost-val').innerText = `${e.target.value} dB`;
+            };
+
+            // Transport Playback
+            document.getElementById('btn-play-pause').onclick = () => togglePlay();
+            document.getElementById('scrubber').oninput = (e) => {
+                if (audioEl.duration) audioEl.currentTime = (e.target.value / 100) * audioEl.duration;
+            };
+            document.getElementById('volume-slider').oninput = (e) => {
+                audioEl.volume = parseFloat(e.target.value);
+            };
+
+            audioEl.ontimeupdate = () => {
+                if (audioEl.duration) {
+                    document.getElementById('scrubber').value = (audioEl.currentTime / audioEl.duration) * 100;
+                    document.getElementById('time-display').innerText = `${formatTime(audioEl.currentTime)} / ${formatTime(audioEl.duration)}`;
+                }
+            };
+        }
+
+        async function handleFileUpload(file) {
+            if (!file) return;
+            document.getElementById('audio-filename').innerText = file.name;
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const res = await fetch('/api/upload', { method: 'POST', body: formData });
+                if (!res.ok) throw new Error(await res.text());
+                const data = await res.json();
+                audioUploadedPath = data.file_path;
+
+                if (file.type.startsWith('audio/')) {
+                    audioEl.src = '/' + data.file_path;
+                    setupWebAudio();
+                }
+            } catch (err) {
+                alert('Upload error: ' + err.message);
+            }
+        }
+
+        function setupWebAudio() {
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                analyser = audioContext.createAnalyser();
+                analyser.fftSize = 256;
+                audioSource = audioContext.createMediaElementSource(audioEl);
+                audioSource.connect(analyser);
+                analyser.connect(audioContext.destination);
+            }
+        }
+
+        function togglePlay() {
+            if (!audioEl.src) return;
+            if (audioContext && audioContext.state === 'suspended') {
+                audioContext.resume();
+            }
+            if (isPlaying) {
+                audioEl.pause();
+                isPlaying = false;
+                document.getElementById('btn-play-pause').innerHTML = `<i data-lucide="play" class="w-5 h-5 fill-current"></i>`;
+            } else {
+                audioEl.play();
+                isPlaying = true;
+                document.getElementById('btn-play-pause').innerHTML = `<i data-lucide="pause" class="w-5 h-5 fill-current"></i>`;
+            }
+            lucide.createIcons();
+        }
+
+        function formatTime(secs) {
+            const m = Math.floor(secs / 60) || 0;
+            const s = Math.floor(secs % 60) || 0;
+            return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+        }
+
+        function addNode(type) {
+            if (!currentTemplate || !currentTemplate.root) return;
+            const newId = `${type.toLowerCase()}_${Date.now().toString().slice(-4)}`;
+            let nodeTypeObj = {};
+            if (type === 'Image') nodeTypeObj = { Image: { asset_id: 'default.png' } };
+            if (type === 'Bars') nodeTypeObj = { Bars: { count: 64, inner_radius: 10, width: 2, is_radial: true, color_start: [0,0.9,1,1], color_end: [1,0.2,0.8,1] } };
+            if (type === 'Text') nodeTypeObj = { Text: { text: 'OpenViz', font_size: 48, color: [1,1,1,1] } };
+
+            const newNode = {
+                id: newId,
+                node_type: nodeTypeObj,
+                transform: { position: [0, 0], scale: [1, 1], rotation: 0, opacity: 1 },
+                bindings: []
+            };
+
+            if (currentTemplate.root.node_type.Group && currentTemplate.root.node_type.Group.children) {
+                currentTemplate.root.node_type.Group.children.push(newNode);
+            }
+            selectedNodeId = newId;
+            renderTree();
+            renderInspector();
+        }
+    </script>
+</body>
+</html>
