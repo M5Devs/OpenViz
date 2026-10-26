@@ -40,7 +40,6 @@
             border-color: rgba(0, 229, 255, 0.4);
             box-shadow: 0 0 15px rgba(0, 229, 255, 0.15);
         }
-        /* Custom scrollbars */
         ::-webkit-scrollbar {
             width: 6px;
             height: 6px;
@@ -181,8 +180,8 @@
         <main class="flex-1 bg-dark-900 relative flex flex-col items-center justify-center p-4 overflow-hidden">
             <!-- Viewport Overlay Info -->
             <div class="absolute top-4 left-4 z-10 flex items-center space-x-2">
-                <span class="text-[11px] font-mono px-2.5 py-1 rounded-md bg-dark-800/90 border border-white/10 text-slate-400">1920 &times; 1080 (16:9)</span>
-                <span id="viewport-[#00e5ff]-tag" class="text-[11px] font-mono px-2 py-1 rounded-md bg-[#00e5ff]/10 border border-[#00e5ff]/30 text-[#00e5ff]">Interactive Gizmo Active</span>
+                <span class="text-[11px] font-mono px-2.5 py-1 rounded-md bg-dark-800/90 border border-white/10 text-slate-400">NDC [-1.0, 1.0] Space</span>
+                <span id="viewport-tag" class="text-[11px] font-mono px-2 py-1 rounded-md bg-[#00e5ff]/10 border border-[#00e5ff]/30 text-[#00e5ff]">Interactive Gizmo Active</span>
             </div>
 
             <!-- HTML5 CANVAS VIEWPORT -->
@@ -275,18 +274,40 @@
         let currentTemplate = null;
         let selectedNodeId = null;
         let audioUploadedPath = null;
-        let audioContext = null;
-        let analyser = null;
-        let audioSource = null;
-        let audioFreqData = new Uint8Array(128);
         let isPlaying = false;
 
+        // WebAudio DSP Graph nodes
+        let audioContext = null;
+        let audioSource = null;
+        let biquadFilter = null;
+        let convolver = null;
+        let reverbGain = null;
+        let dryGain = null;
+        let stereoPanner = null;
+        let analyser = null;
+        let audioFreqData = new Uint8Array(128);
+
         // Interactive Transform Gizmo state
-        let gizmoDrag = null; // { mode: 'translate'|'scale'|'rotate', startX, startY, origPos, origScale, origRot }
+        let gizmoDrag = null; // { mode: 'translate'|'scale'|'rotate', startX, startY, origPos, origScale, origRot, cx, cy }
 
         const canvas = document.getElementById('viewport-canvas');
         const ctx = canvas.getContext('2d');
         const audioEl = document.getElementById('audio-player');
+
+        // --- COORDINATE SYSTEM NORMALIZATION (NDC [-1.0, 1.0]) ---
+        function screen_to_ndc(x_px, y_px) {
+            return {
+                x: ((x_px / canvas.width) * 2.0) - 1.0,
+                y: 1.0 - ((y_px / canvas.height) * 2.0)
+            };
+        }
+
+        function ndc_to_screen(ndc_x, ndc_y) {
+            return {
+                x: (ndc_x + 1.0) * 0.5 * canvas.width,
+                y: (1.0 - ndc_y) * 0.5 * canvas.height
+            };
+        }
 
         // --- INITIALIZATION ---
         window.addEventListener('DOMContentLoaded', async () => {
@@ -389,26 +410,80 @@
             let typeSpecificHTML = '';
             if (node.node_type.Bars) {
                 const b = node.node_type.Bars;
+                const innerRadius = b.inner_radius !== undefined ? b.inner_radius : 0.25;
+                const width = b.width !== undefined ? b.width : 0.015;
                 typeSpecificHTML = `
                     <div class="space-y-2 pt-2 border-t border-white/10">
                         <label class="font-semibold text-slate-200 block text-[11px] uppercase tracking-wider">Spectrum Bars Setup</label>
                         <div class="grid grid-cols-2 gap-2">
                             <div>
                                 <span class="text-[10px] text-slate-400">Count</span>
-                                <input type="number" id="inp-bar-count" value="${b.count}" class="w-full bg-dark-800 border border-white/10 rounded px-2 py-1 text-slate-200">
+                                <input type="number" id="inp-bar-count" value="${b.count || 64}" min="4" max="256" step="1" class="w-full bg-dark-800 border border-white/10 rounded px-2 py-1 text-slate-200">
                             </div>
                             <div>
-                                <span class="text-[10px] text-slate-400">Width</span>
-                                <input type="number" step="0.5" id="inp-bar-width" value="${b.width}" class="w-full bg-dark-800 border border-white/10 rounded px-2 py-1 text-slate-200">
+                                <span class="text-[10px] text-slate-400">Width (NDC)</span>
+                                <input type="number" step="0.005" min="0.001" max="0.5" id="inp-bar-width" value="${width}" class="w-full bg-dark-800 border border-white/10 rounded px-2 py-1 text-slate-200">
                             </div>
                         </div>
-                        <div class="flex items-center justify-between pt-1">
-                            <span class="text-[10px] text-slate-400">Radial Layout</span>
-                            <input type="checkbox" id="inp-bar-radial" ${b.is_radial ? 'checked' : ''} class="accent-[#00e5ff] w-4 h-4">
+                        <div class="grid grid-cols-2 gap-2">
+                            <div>
+                                <span class="text-[10px] text-slate-400">Inner Radius (NDC)</span>
+                                <input type="number" step="0.01" min="0.0" max="1.0" id="inp-bar-inner-radius" value="${innerRadius}" class="w-full bg-dark-800 border border-white/10 rounded px-2 py-1 text-slate-200">
+                            </div>
+                            <div class="flex flex-col justify-end pb-1">
+                                <label class="flex items-center space-x-2 cursor-pointer">
+                                    <input type="checkbox" id="inp-bar-radial" ${b.is_radial ? 'checked' : ''} class="accent-[#00e5ff] w-4 h-4">
+                                    <span class="text-[10px] text-slate-400">Radial Layout</span>
+                                </label>
+                            </div>
                         </div>
                     </div>
                 `;
             }
+
+            let bindingHTML = '';
+            const activeBinding = (node.bindings && node.bindings.length > 0) ? node.bindings[0] : null;
+            let currentSource = 'Bass';
+            if (activeBinding) {
+                if (typeof activeBinding.source === 'string') currentSource = activeBinding.source;
+                else if (activeBinding.source.Bass !== undefined) currentSource = 'Bass';
+                else if (activeBinding.source.Mid !== undefined) currentSource = 'Mid';
+                else if (activeBinding.source.High !== undefined) currentSource = 'High';
+                else if (activeBinding.source.Beat !== undefined) currentSource = 'Beat';
+            }
+            let currentTarget = node.node_type.Bars ? 'BarHeight' : 'ScaleUniform';
+            if (activeBinding) {
+                if (typeof activeBinding.target === 'string') currentTarget = activeBinding.target;
+            }
+
+            bindingHTML = `
+                <div class="space-y-2 pt-2 border-t border-white/10">
+                    <label class="font-semibold text-slate-200 block text-[11px] uppercase tracking-wider flex items-center justify-between">
+                        <span>Audio Reactivity</span>
+                        <span class="text-[9px] text-[#00e5ff] font-mono">DSP Live</span>
+                    </label>
+                    <div class="space-y-2 bg-dark-800/80 p-2.5 rounded border border-white/5">
+                        <div>
+                            <span class="text-[10px] text-slate-400">React To Audio Frequency</span>
+                            <select id="inp-bind-source" class="w-full bg-dark-900 border border-white/10 rounded px-2 py-1 text-xs text-slate-200 mt-0.5">
+                                <option value="Bass" ${currentSource === 'Bass' ? 'selected' : ''}>Bass (20 - 250 Hz)</option>
+                                <option value="Mid" ${currentSource === 'Mid' ? 'selected' : ''}>Mid (250 - 4 kHz)</option>
+                                <option value="High" ${currentSource === 'High' ? 'selected' : ''}>High (4 k - 20 kHz)</option>
+                                <option value="Beat" ${currentSource === 'Beat' ? 'selected' : ''}>Beat Pulse</option>
+                            </select>
+                        </div>
+                        <div>
+                            <span class="text-[10px] text-slate-400">Target Property</span>
+                            <select id="inp-bind-target" class="w-full bg-dark-900 border border-white/10 rounded px-2 py-1 text-xs text-slate-200 mt-0.5">
+                                <option value="ScaleUniform" ${currentTarget === 'ScaleUniform' ? 'selected' : ''}>Scale (Pulse)</option>
+                                <option value="BarHeight" ${currentTarget === 'BarHeight' ? 'selected' : ''}>Spectrum Height</option>
+                                <option value="Opacity" ${currentTarget === 'Opacity' ? 'selected' : ''}>Opacity Flash</option>
+                                <option value="Rotation" ${currentTarget === 'Rotation' ? 'selected' : ''}>Rotation Wobble</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            `;
 
             container.innerHTML = `
                 <div class="space-y-4">
@@ -418,26 +493,26 @@
                     </div>
 
                     <div class="space-y-2 pt-2 border-t border-white/10">
-                        <label class="font-semibold text-slate-200 block text-[11px] uppercase tracking-wider">Transform</label>
+                        <label class="font-semibold text-slate-200 block text-[11px] uppercase tracking-wider">Transform (NDC [-1.0, 1.0])</label>
                         <div class="grid grid-cols-2 gap-2">
                             <div>
-                                <span class="text-[10px] text-slate-400">Pos X</span>
-                                <input type="number" id="inp-pos-x" value="${transform.position[0]}" step="10" class="w-full bg-dark-800 border border-white/10 rounded px-2 py-1 text-slate-200">
+                                <span class="text-[10px] text-slate-400">Pos X (NDC)</span>
+                                <input type="number" id="inp-pos-x" value="${transform.position[0]}" min="-1.0" max="1.0" step="0.01" class="w-full bg-dark-800 border border-white/10 rounded px-2 py-1 text-slate-200">
                             </div>
                             <div>
-                                <span class="text-[10px] text-slate-400">Pos Y</span>
-                                <input type="number" id="inp-pos-y" value="${transform.position[1]}" step="10" class="w-full bg-dark-800 border border-white/10 rounded px-2 py-1 text-slate-200">
+                                <span class="text-[10px] text-slate-400">Pos Y (NDC)</span>
+                                <input type="number" id="inp-pos-y" value="${transform.position[1]}" min="-1.0" max="1.0" step="0.01" class="w-full bg-dark-800 border border-white/10 rounded px-2 py-1 text-slate-200">
                             </div>
                         </div>
 
                         <div class="grid grid-cols-2 gap-2">
                             <div>
                                 <span class="text-[10px] text-slate-400">Scale X</span>
-                                <input type="number" id="inp-scale-x" value="${transform.scale[0]}" step="0.1" class="w-full bg-dark-800 border border-white/10 rounded px-2 py-1 text-slate-200">
+                                <input type="number" id="inp-scale-x" value="${transform.scale[0]}" min="0.05" max="10.0" step="0.05" class="w-full bg-dark-800 border border-white/10 rounded px-2 py-1 text-slate-200">
                             </div>
                             <div>
                                 <span class="text-[10px] text-slate-400">Scale Y</span>
-                                <input type="number" id="inp-scale-y" value="${transform.scale[1]}" step="0.1" class="w-full bg-dark-800 border border-white/10 rounded px-2 py-1 text-slate-200">
+                                <input type="number" id="inp-scale-y" value="${transform.scale[1]}" min="0.05" max="10.0" step="0.05" class="w-full bg-dark-800 border border-white/10 rounded px-2 py-1 text-slate-200">
                             </div>
                         </div>
 
@@ -459,34 +534,7 @@
                     </div>
 
                     ${typeSpecificHTML}
-
-                    <!-- AUDIO REACTIVITY BINDINGS -->
-                    <div class="space-y-2 pt-2 border-t border-white/10">
-                        <label class="font-semibold text-slate-200 block text-[11px] uppercase tracking-wider flex items-center justify-between">
-                            <span>Audio Reactivity</span>
-                            <span class="text-[9px] text-[#00e5ff] font-mono">DSP Live</span>
-                        </label>
-                        <div class="space-y-2 bg-dark-800/80 p-2.5 rounded border border-white/5">
-                            <div>
-                                <span class="text-[10px] text-slate-400">React To Audio Frequency</span>
-                                <select id="inp-bind-source" class="w-full bg-dark-900 border border-white/10 rounded px-2 py-1 text-xs text-slate-200 mt-0.5">
-                                    <option value="Bass">Bass (20 - 250 Hz)</option>
-                                    <option value="Mid">Mid (250 - 4 kHz)</option>
-                                    <option value="High">High (4 k - 20 kHz)</option>
-                                    <option value="Beat">Beat Pulse</option>
-                                </select>
-                            </div>
-                            <div>
-                                <span class="text-[10px] text-slate-400">Target Property</span>
-                                <select id="inp-bind-target" class="w-full bg-dark-900 border border-white/10 rounded px-2 py-1 text-xs text-slate-200 mt-0.5">
-                                    <option value="ScaleUniform">Scale (Pulse)</option>
-                                    <option value="BarHeight">Spectrum Height</option>
-                                    <option value="Opacity">Opacity Flash</option>
-                                    <option value="Rotation">Rotation Wobble</option>
-                                </select>
-                            </div>
-                        </div>
-                    </div>
+                    ${bindingHTML}
                 </div>
             `;
 
@@ -506,25 +554,192 @@
             };
 
             if (node.node_type.Bars) {
-                document.getElementById('inp-bar-count').onchange = (e) => { node.node_type.Bars.count = parseInt(e.target.value) || 32; };
-                document.getElementById('inp-bar-width').onchange = (e) => { node.node_type.Bars.width = parseFloat(e.target.value) || 2; };
+                document.getElementById('inp-bar-count').onchange = (e) => { node.node_type.Bars.count = parseInt(e.target.value) || 64; };
+                document.getElementById('inp-bar-width').onchange = (e) => { node.node_type.Bars.width = parseFloat(e.target.value) || 0.015; };
+                document.getElementById('inp-bar-inner-radius').onchange = (e) => { node.node_type.Bars.inner_radius = parseFloat(e.target.value) || 0.25; };
                 document.getElementById('inp-bar-radial').onchange = (e) => { node.node_type.Bars.is_radial = e.target.checked; };
+            }
+
+            const updateBindings = () => {
+                const srcVal = document.getElementById('inp-bind-source').value;
+                const tgtVal = document.getElementById('inp-bind-target').value;
+                let range = [0.5, 2.5];
+                if (tgtVal === 'ScaleUniform') range = [1.0, 1.3];
+                if (tgtVal === 'Opacity') range = [0.2, 1.0];
+                if (tgtVal === 'Rotation') range = [-0.2, 0.2];
+
+                node.bindings = [{
+                    source: srcVal,
+                    target: tgtVal,
+                    curve: 'Linear',
+                    output_range: range
+                }];
+            };
+
+            document.getElementById('inp-bind-source').onchange = updateBindings;
+            document.getElementById('inp-bind-target').onchange = updateBindings;
+        }
+
+        // --- REAL-TIME WEBAUDIO DSP ENGINE ---
+        function createReverbImpulse(ctx, duration = 2.0, decay = 2.0) {
+            const sampleRate = ctx.sampleRate;
+            const length = sampleRate * duration;
+            const impulse = ctx.createBuffer(2, length, sampleRate);
+            const left = impulse.getChannelData(0);
+            const right = impulse.getChannelData(1);
+            for (let i = 0; i < length; i++) {
+                left[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / length, decay);
+                right[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / length, decay);
+            }
+            return impulse;
+        }
+
+        function setupWebAudio() {
+            if (audioContext) return;
+            const AudioCtx = window.AudioContext || window.webkitAudioContext;
+            audioContext = new AudioCtx();
+
+            audioSource = audioContext.createMediaElementSource(audioEl);
+
+            // 1. Low-shelf BiquadFilter for Bass Boost
+            biquadFilter = audioContext.createBiquadFilter();
+            biquadFilter.type = 'lowshelf';
+            biquadFilter.frequency.value = 120;
+            const bassDb = parseFloat(document.getElementById('fx-bass-boost').value) || 0;
+            biquadFilter.gain.value = bassDb;
+
+            // 2. Convolver & Reverb Gain
+            convolver = audioContext.createConvolver();
+            convolver.buffer = createReverbImpulse(audioContext);
+            reverbGain = audioContext.createGain();
+            reverbGain.gain.value = document.getElementById('fx-slowed').checked ? 0.4 : 0.0;
+
+            dryGain = audioContext.createGain();
+            dryGain.gain.value = 1.0;
+
+            // 3. Stereo Panner
+            if (audioContext.createStereoPanner) {
+                stereoPanner = audioContext.createStereoPanner();
+            } else {
+                stereoPanner = audioContext.createGain();
+            }
+
+            // 4. Analyser
+            analyser = audioContext.createAnalyser();
+            analyser.fftSize = 256;
+
+            // Connect Graph:
+            // audioSource -> biquadFilter
+            audioSource.connect(biquadFilter);
+
+            // biquadFilter -> dryGain -> stereoPanner
+            biquadFilter.connect(dryGain);
+            dryGain.connect(stereoPanner);
+
+            // biquadFilter -> convolver -> reverbGain -> stereoPanner
+            biquadFilter.connect(convolver);
+            convolver.connect(reverbGain);
+            reverbGain.connect(stereoPanner);
+
+            // stereoPanner -> analyser -> destination
+            stereoPanner.connect(analyser);
+            analyser.connect(audioContext.destination);
+        }
+
+        function applyAudioEffects() {
+            if (!audioEl) return;
+
+            const slowed = document.getElementById('fx-slowed').checked;
+            const nightcore = document.getElementById('fx-nightcore').checked;
+            const bassDb = parseFloat(document.getElementById('fx-bass-boost').value) || 0;
+
+            if (biquadFilter) {
+                biquadFilter.gain.value = bassDb;
+            }
+
+            // Pitch preservation off for tape-stop/speed effects
+            audioEl.preservesPitch = false;
+            if (audioEl.webkitPreservesPitch !== undefined) audioEl.webkitPreservesPitch = false;
+            if (audioEl.mozPreservesPitch !== undefined) audioEl.mozPreservesPitch = false;
+
+            if (slowed) {
+                audioEl.playbackRate = 0.85;
+                if (reverbGain) reverbGain.gain.value = 0.4;
+            } else if (nightcore) {
+                audioEl.playbackRate = 1.25;
+                if (reverbGain) reverbGain.gain.value = 0.0;
+            } else {
+                audioEl.playbackRate = 1.0;
+                if (reverbGain) reverbGain.gain.value = 0.0;
             }
         }
 
-        // --- CANVAS RENDER & INTERACTIVE TRANSFORM GIZMO ---
-        function getAudioEnergy(type) {
-            if (!analyser) return 0.2;
+        // --- AUDIO BINDING EVALUATION & AUDIO FEATURES ---
+        function getAudioFeatures() {
+            if (!analyser) {
+                return { bass: 0.2, mid: 0.1, high: 0.1, rms: 0.15, beat: false, raw_spectrum: new Float32Array(64) };
+            }
             analyser.getByteFrequencyData(audioFreqData);
-            let sum = 0, count = 0;
-            if (type === 'Bass') { for(let i=0; i<15; i++) { sum+=audioFreqData[i]; count++; } }
-            else if (type === 'Mid') { for(let i=15; i<60; i++) { sum+=audioFreqData[i]; count++; } }
-            else if (type === 'High') { for(let i=60; i<120; i++) { sum+=audioFreqData[i]; count++; } }
-            else { for(let i=0; i<10; i++) { sum+=audioFreqData[i]; count++; } }
-            return (sum / (count * 255)) || 0.1;
+
+            let bassSum = 0, bassCount = 0;
+            for (let i = 0; i < 15; i++) { bassSum += audioFreqData[i]; bassCount++; }
+            let midSum = 0, midCount = 0;
+            for (let i = 15; i < 60; i++) { midSum += audioFreqData[i]; midCount++; }
+            let highSum = 0, highCount = 0;
+            for (let i = 60; i < 120; i++) { highSum += audioFreqData[i]; highCount++; }
+
+            const bass = (bassSum / (bassCount * 255)) || 0;
+            const mid = (midSum / (midCount * 255)) || 0;
+            const high = (highSum / (highCount * 255)) || 0;
+            const rms = Math.sqrt((bass*bass + mid*mid + high*high) / 3);
+            const beat = bass > 0.6;
+
+            const normSpectrum = new Float32Array(64);
+            for (let i = 0; i < 64; i++) {
+                normSpectrum[i] = (audioFreqData[i] || 0) / 255.0;
+            }
+
+            return { bass, mid, high, rms, beat, raw_spectrum: normSpectrum };
         }
 
+        function evaluateBinding(binding, features) {
+            let rawVal = 0.0;
+            const src = binding.source;
+            if (src === 'Bass' || src?.Bass) rawVal = features.bass;
+            else if (src === 'Mid' || src?.Mid) rawVal = features.mid;
+            else if (src === 'High' || src?.High) rawVal = features.high;
+            else if (src === 'Beat' || src?.Beat) rawVal = features.beat ? 1.0 : 0.0;
+            else if (src === 'Rms' || src?.Rms) rawVal = features.rms;
+            else if (typeof src === 'object' && src.SpectrumBin !== undefined) {
+                rawVal = features.raw_spectrum[src.SpectrumBin] || 0.0;
+            }
+
+            const t = Math.max(0.0, Math.min(1.0, rawVal));
+            let mappedT = t;
+            const curve = binding.curve;
+            if (curve === 'Linear' || curve?.Linear) mappedT = t;
+            else if (curve === 'SmoothStep' || curve?.SmoothStep) mappedT = t * t * (3.0 - 2.0 * t);
+            else if (curve === 'EaseOut' || curve?.EaseOut) mappedT = 1.0 - (1.0 - t) * (1.0 - t);
+            else if (typeof curve === 'object' && curve.Pow !== undefined) mappedT = Math.pow(t, curve.Pow);
+
+            const range = binding.output_range || [0, 1];
+            return range[0] + mappedT * (range[1] - range[0]);
+        }
+
+        function colorToRgba(c) {
+            if (!c || !Array.isArray(c)) return 'rgba(0, 229, 255, 1)';
+            return `rgba(${Math.round(c[0] * 255)}, ${Math.round(c[1] * 255)}, ${Math.round(c[2] * 255)}, ${c[3] ?? 1})`;
+        }
+
+        // --- CANVAS RENDER & INTERACTIVE TRANSFORM GIZMO ---
         function renderLoop() {
+            // Update 8D Audio Panner LFO if active
+            if (document.getElementById('fx-8d').checked && stereoPanner && stereoPanner.pan) {
+                stereoPanner.pan.value = Math.sin(performance.now() * 0.001 * 0.8);
+            } else if (stereoPanner && stereoPanner.pan) {
+                stereoPanner.pan.value = 0;
+            }
+
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
             // 1. Draw Background
@@ -532,8 +747,9 @@
             ctx.fillRect(0, 0, canvas.width, canvas.height);
 
             if (currentTemplate && currentTemplate.root) {
+                const features = getAudioFeatures();
                 // 2. Render Scene Nodes
-                renderNode(currentTemplate.root);
+                renderNode(currentTemplate.root, features);
 
                 // 3. Draw Interactive Transform Gizmo for selected element
                 if (selectedNodeId) {
@@ -547,24 +763,50 @@
             requestAnimationFrame(renderLoop);
         }
 
-        function renderNode(node) {
+        function renderNode(node, features) {
             ctx.save();
-            const pos = node.transform.position || [0,0];
-            const scale = node.transform.scale || [1,1];
-            const rot = node.transform.rotation || 0;
-            const opacity = node.transform.opacity ?? 1;
 
-            ctx.translate(canvas.width/2 + pos[0], canvas.height/2 + pos[1]);
+            let pos = [...(node.transform.position || [0, 0])];
+            let scale = [...(node.transform.scale || [1, 1])];
+            let rot = node.transform.rotation || 0;
+            let opacity = node.transform.opacity ?? 1;
+            let barHeightMult = 1.0;
+
+            if (node.bindings && node.bindings.length > 0) {
+                for (const binding of node.bindings) {
+                    const val = evaluateBinding(binding, features);
+                    const target = binding.target;
+                    if (target === 'ScaleUniform' || target?.ScaleUniform) {
+                        scale = [val, val];
+                    } else if (target === 'ScaleX' || target?.ScaleX) {
+                        scale[0] = val;
+                    } else if (target === 'ScaleY' || target?.ScaleY) {
+                        scale[1] = val;
+                    } else if (target === 'Rotation' || target?.Rotation) {
+                        rot = val;
+                    } else if (target === 'Opacity' || target?.Opacity) {
+                        opacity = val;
+                    } else if (target === 'BarHeight' || target?.BarHeight) {
+                        barHeightMult = val;
+                    }
+                }
+            }
+
+            // Map position from NDC [-1.0, 1.0] to Screen Canvas pixels
+            const screenPos = ndc_to_screen(pos[0], pos[1]);
+
+            ctx.translate(screenPos.x, screenPos.y);
             ctx.rotate(rot);
             ctx.scale(scale[0], scale[1]);
             ctx.globalAlpha = opacity;
 
             if (node.node_type.Image) {
+                const logoRadius = 0.25 * 0.5 * canvas.height;
                 ctx.fillStyle = '#1c2130';
                 ctx.strokeStyle = '#00e5ff';
                 ctx.lineWidth = 4;
                 ctx.beginPath();
-                ctx.arc(0, 0, 120, 0, Math.PI * 2);
+                ctx.arc(0, 0, logoRadius, 0, Math.PI * 2);
                 ctx.fill();
                 ctx.stroke();
 
@@ -576,23 +818,56 @@
             } else if (node.node_type.Bars) {
                 const b = node.node_type.Bars;
                 const count = b.count || 64;
-                const radius = b.inner_radius ? b.inner_radius * 12 : 140;
-                const bassVal = getAudioEnergy('Bass');
+                const innerRadiusNDC = b.inner_radius !== undefined ? b.inner_radius : 0.25;
+                const widthNDC = b.width !== undefined ? b.width : 0.015;
 
-                if (b.is_radial) {
+                const rInnerPx = innerRadiusNDC * 0.5 * canvas.height;
+                const wBarPx = Math.max(1, widthNDC * 0.5 * canvas.width);
+
+                if (b.is_radial !== false) {
                     for (let i = 0; i < count; i++) {
-                        const angle = (i / count) * Math.PI * 2;
-                        const barLen = 20 + (bassVal * 160 * (1 + (i % 5)*0.2));
-                        const x1 = Math.cos(angle) * radius;
-                        const y1 = Math.sin(angle) * radius;
-                        const x2 = Math.cos(angle) * (radius + barLen);
-                        const y2 = Math.sin(angle) * (radius + barLen);
+                        const angle = (i / count) * Math.PI * 2 - Math.PI / 2;
+                        const binVal = features.raw_spectrum[i % features.raw_spectrum.length] || features.bass;
+                        const barLenNDC = binVal * 0.3 * barHeightMult;
+                        const rOuterPx = (innerRadiusNDC + barLenNDC) * 0.5 * canvas.height;
 
-                        ctx.strokeStyle = i % 2 === 0 ? '#00e5ff' : '#ff2a85';
-                        ctx.lineWidth = b.width ? b.width * 2 : 4;
+                        const x1 = Math.cos(angle) * rInnerPx;
+                        const y1 = Math.sin(angle) * rInnerPx;
+                        const x2 = Math.cos(angle) * rOuterPx;
+                        const y2 = Math.sin(angle) * rOuterPx;
+
+                        const grad = ctx.createLinearGradient(x1, y1, x2, y2);
+                        grad.addColorStop(0, colorToRgba(b.color_start || [0.1, 0.8, 1.0, 1.0]));
+                        grad.addColorStop(1, colorToRgba(b.color_end || [1.0, 0.2, 0.8, 1.0]));
+
+                        ctx.strokeStyle = grad;
+                        ctx.lineWidth = wBarPx;
                         ctx.beginPath();
                         ctx.moveTo(x1, y1);
                         ctx.lineTo(x2, y2);
+                        ctx.stroke();
+                    }
+                } else {
+                    const totalWidthNDC = 1.8;
+                    const stepNDC = totalWidthNDC / count;
+                    for (let i = 0; i < count; i++) {
+                        const binVal = features.raw_spectrum[i % features.raw_spectrum.length] || features.bass;
+                        const heightNDC = binVal * 0.8 * barHeightMult;
+                        const xNDC = -totalWidthNDC / 2 + i * stepNDC + stepNDC / 2;
+
+                        const xPx = xNDC * 0.5 * canvas.width;
+                        const y1Px = 0;
+                        const y2Px = -heightNDC * 0.5 * canvas.height;
+
+                        const grad = ctx.createLinearGradient(xPx, y1Px, xPx, y2Px);
+                        grad.addColorStop(0, colorToRgba(b.color_start || [0.1, 0.8, 1.0, 1.0]));
+                        grad.addColorStop(1, colorToRgba(b.color_end || [1.0, 0.2, 0.8, 1.0]));
+
+                        ctx.strokeStyle = grad;
+                        ctx.lineWidth = wBarPx;
+                        ctx.beginPath();
+                        ctx.moveTo(xPx, y1Px);
+                        ctx.lineTo(xPx, y2Px);
                         ctx.stroke();
                     }
                 }
@@ -600,9 +875,10 @@
                 ctx.fillStyle = '#ffffff';
                 ctx.font = 'bold 36px sans-serif';
                 ctx.textAlign = 'center';
-                ctx.fillText('OpenViz Studio', 0, 0);
+                ctx.textBaseline = 'middle';
+                ctx.fillText(node.node_type.Text.text || 'OpenViz Studio', 0, 0);
             } else if (node.node_type.Group && node.node_type.Group.children) {
-                node.node_type.Group.children.forEach(child => renderNode(child));
+                node.node_type.Group.children.forEach(child => renderNode(child, features));
             }
 
             ctx.restore();
@@ -614,12 +890,13 @@
             const scale = node.transform.scale || [1,1];
             const rot = node.transform.rotation || 0;
 
-            const cx = canvas.width/2 + pos[0];
-            const cy = canvas.height/2 + pos[1];
-            const w = 300 * Math.abs(scale[0]);
-            const h = 300 * Math.abs(scale[1]);
+            const center = ndc_to_screen(pos[0], pos[1]);
+            const baseW = 0.5 * canvas.width;
+            const baseH = 0.5 * canvas.height;
+            const w = baseW * Math.abs(scale[0]);
+            const h = baseH * Math.abs(scale[1]);
 
-            ctx.translate(cx, cy);
+            ctx.translate(center.x, center.y);
             ctx.rotate(rot);
 
             // Bounding Box
@@ -675,21 +952,22 @@
             const scale = selNode.transform.scale || [1,1];
             const rot = selNode.transform.rotation || 0;
 
-            const cx = canvas.width/2 + pos[0];
-            const cy = canvas.height/2 + pos[1];
-            const w = 300 * Math.abs(scale[0]);
-            const h = 300 * Math.abs(scale[1]);
+            const center = ndc_to_screen(pos[0], pos[1]);
+            const baseW = 0.5 * canvas.width;
+            const baseH = 0.5 * canvas.height;
+            const w = baseW * Math.abs(scale[0]);
+            const h = baseH * Math.abs(scale[1]);
 
             // Transform mouse point into local node coordinate space
-            const dx = mouseX - cx;
-            const dy = mouseY - cy;
+            const dx = mouseX - center.x;
+            const dy = mouseY - center.y;
             const localX = dx * Math.cos(-rot) - dy * Math.sin(-rot);
             const localY = dx * Math.sin(-rot) + dy * Math.cos(-rot);
 
             // Check Rotation Pin (-35px above top center)
             const pinDist = Math.hypot(localX - 0, localY - (-h/2 - 35));
             if (pinDist <= 12) {
-                gizmoDrag = { mode: 'rotate', startX: mouseX, startY: mouseY, origRot: rot, cx, cy };
+                gizmoDrag = { mode: 'rotate', startX: mouseX, startY: mouseY, origRot: rot, cx: center.x, cy: center.y };
                 return;
             }
 
@@ -718,14 +996,17 @@
             const mouseY = ((e.clientY - rect.top) / rect.height) * canvas.height;
 
             if (gizmoDrag.mode === 'translate') {
-                const deltaX = mouseX - gizmoDrag.startX;
-                const deltaY = mouseY - gizmoDrag.startY;
-                selNode.transform.position[0] = Math.round(gizmoDrag.origPos[0] + deltaX);
-                selNode.transform.position[1] = Math.round(gizmoDrag.origPos[1] + deltaY);
+                const mouseDeltaX = mouseX - gizmoDrag.startX;
+                const mouseDeltaY = mouseY - gizmoDrag.startY;
+                const deltaNdcX = (mouseDeltaX / canvas.width) * 2.0;
+                const deltaNdcY = -(mouseDeltaY / canvas.height) * 2.0;
+
+                selNode.transform.position[0] = parseFloat((gizmoDrag.origPos[0] + deltaNdcX).toFixed(4));
+                selNode.transform.position[1] = parseFloat((gizmoDrag.origPos[1] + deltaNdcY).toFixed(4));
             } else if (gizmoDrag.mode === 'scale') {
-                const deltaX = (mouseX - gizmoDrag.startX) / 150;
-                selNode.transform.scale[0] = Math.max(0.1, parseFloat((gizmoDrag.origScale[0] + deltaX).toFixed(2)));
-                selNode.transform.scale[1] = Math.max(0.1, parseFloat((gizmoDrag.origScale[1] + deltaX).toFixed(2)));
+                const mouseDeltaX = (mouseX - gizmoDrag.startX) / (canvas.width * 0.25);
+                selNode.transform.scale[0] = Math.max(0.05, parseFloat((gizmoDrag.origScale[0] + mouseDeltaX).toFixed(2)));
+                selNode.transform.scale[1] = Math.max(0.05, parseFloat((gizmoDrag.origScale[1] + mouseDeltaX).toFixed(2)));
             } else if (gizmoDrag.mode === 'rotate') {
                 const angle = Math.atan2(mouseY - gizmoDrag.cy, mouseX - gizmoDrag.cx) + (Math.PI / 2);
                 selNode.transform.rotation = parseFloat(angle.toFixed(2));
@@ -742,6 +1023,14 @@
             document.getElementById('btn-add-image').onclick = () => addNode('Image');
             document.getElementById('btn-add-bars').onclick = () => addNode('Bars');
             document.getElementById('btn-add-text').onclick = () => addNode('Text');
+
+            // DSP Toggles and Sliders
+            document.getElementById('fx-slowed').onchange = () => applyAudioEffects();
+            document.getElementById('fx-nightcore').onchange = () => applyAudioEffects();
+            document.getElementById('fx-bass-boost').oninput = (e) => {
+                document.getElementById('fx-bass-boost-val').innerText = `${e.target.value} dB`;
+                applyAudioEffects();
+            };
 
             // Import .viz
             document.getElementById('import-viz-input').onchange = async (e) => {
@@ -793,8 +1082,9 @@
                     template: currentTemplate,
                     effects: {
                         slowed: document.getElementById('fx-slowed').checked,
+                        nightcore: document.getElementById('fx-nightcore').checked,
                         bass_boost_db: parseFloat(document.getElementById('fx-bass-boost').value) || null,
-                        nightcore: document.getElementById('fx-[#ff2a85]' || 'fx-nightcore').checked,
+                        reverb: document.getElementById('fx-slowed').checked ? 0.4 : null,
                         eight_d: document.getElementById('fx-8d').checked
                     },
                     width: 1920,
@@ -839,11 +1129,6 @@
                 if (e.dataTransfer.files.length > 0) handleFileUpload(e.dataTransfer.files[0]);
             };
 
-            // Bass boost slider UI text update
-            document.getElementById('fx-bass-boost').oninput = (e) => {
-                document.getElementById('fx-bass-boost-val').innerText = `${e.target.value} dB`;
-            };
-
             // Transport Playback
             document.getElementById('btn-play-pause').onclick = () => togglePlay();
             document.getElementById('scrubber').oninput = (e) => {
@@ -877,25 +1162,16 @@
                 if (file.type.startsWith('audio/')) {
                     audioEl.src = '/' + data.file_path;
                     setupWebAudio();
+                    applyAudioEffects();
                 }
             } catch (err) {
                 alert('Upload error: ' + err.message);
             }
         }
 
-        function setupWebAudio() {
-            if (!audioContext) {
-                audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                analyser = audioContext.createAnalyser();
-                analyser.fftSize = 256;
-                audioSource = audioContext.createMediaElementSource(audioEl);
-                audioSource.connect(analyser);
-                analyser.connect(audioContext.destination);
-            }
-        }
-
         function togglePlay() {
             if (!audioEl.src) return;
+            setupWebAudio();
             if (audioContext && audioContext.state === 'suspended') {
                 audioContext.resume();
             }
@@ -922,13 +1198,13 @@
             const newId = `${type.toLowerCase()}_${Date.now().toString().slice(-4)}`;
             let nodeTypeObj = {};
             if (type === 'Image') nodeTypeObj = { Image: { asset_id: 'default.png' } };
-            if (type === 'Bars') nodeTypeObj = { Bars: { count: 64, inner_radius: 10, width: 2, is_radial: true, color_start: [0,0.9,1,1], color_end: [1,0.2,0.8,1] } };
-            if (type === 'Text') nodeTypeObj = { Text: { text: 'OpenViz', font_size: 48, color: [1,1,1,1] } };
+            if (type === 'Bars') nodeTypeObj = { Bars: { count: 64, inner_radius: 0.25, width: 0.015, is_radial: true, color_start: [0.1, 0.8, 1.0, 1.0], color_end: [1.0, 0.2, 0.8, 1.0] } };
+            if (type === 'Text') nodeTypeObj = { Text: { text: 'OpenViz Studio', font_asset_id: null, size: 36 } };
 
             const newNode = {
                 id: newId,
                 node_type: nodeTypeObj,
-                transform: { position: [0, 0], scale: [1, 1], rotation: 0, opacity: 1 },
+                transform: { position: [0.0, 0.0], scale: [1.0, 1.0], rotation: 0.0, opacity: 1.0 },
                 bindings: []
             };
 

@@ -102,8 +102,8 @@ pub fn default_template() -> Template {
         id: "radial_bars".to_string(),
         node_type: NodeType::Bars {
             count: 64,
-            inner_radius: 10.0,
-            width: 2.0,
+            inner_radius: 0.25,
+            width: 0.015,
             is_radial: true,
             color_start: [0.1, 0.8, 1.0, 1.0],
             color_end: [1.0, 0.2, 0.8, 1.0],

@@ -110,3 +110,133 @@ async fn test_post_upload_returns_200_json() {
         .starts_with("static/uploads/"));
     assert_eq!(json["filename"], "test.mp3");
 }
+
+#[tokio::test]
+async fn test_studio_export_request_deserialization_and_template_schema() {
+    let studio_payload_json = serde_json::json!({
+        "audio_path": "static/uploads/test.mp3",
+        "template": {
+            "schema_version": "openviz/1",
+            "name": "Studio Spectrum",
+            "author": "OpenViz Studio User",
+            "canvas_aspect": "16:9",
+            "clear_color": [0.05, 0.05, 0.08, 1.0],
+            "root": {
+                "id": "root",
+                "node_type": {
+                    "type": "Group",
+                    "children": [
+                        {
+                            "id": "radial_bars_1",
+                            "node_type": {
+                                "type": "Bars",
+                                "count": 64,
+                                "inner_radius": 0.25,
+                                "width": 0.015,
+                                "is_radial": true,
+                                "color_start": [0.1, 0.8, 1.0, 1.0],
+                                "color_end": [1.0, 0.2, 0.8, 1.0]
+                            },
+                            "transform": {
+                                "position": [0.0, 0.0],
+                                "scale": [1.0, 1.0],
+                                "rotation": 0.0,
+                                "opacity": 1.0
+                            },
+                            "bindings": [
+                                {
+                                    "source": "Bass",
+                                    "target": "BarHeight",
+                                    "curve": "Linear",
+                                    "output_range": [0.5, 2.5]
+                                }
+                            ]
+                        },
+                        {
+                            "id": "center_logo_1",
+                            "node_type": {
+                                "type": "Image",
+                                "asset_id": "logo.png"
+                            },
+                            "transform": {
+                                "position": [0.0, 0.0],
+                                "scale": [1.0, 1.0],
+                                "rotation": 0.0,
+                                "opacity": 1.0
+                            },
+                            "bindings": [
+                                {
+                                    "source": "Bass",
+                                    "target": "ScaleUniform",
+                                    "curve": "Linear",
+                                    "output_range": [1.0, 1.3]
+                                }
+                            ]
+                        }
+                    ]
+                },
+                "transform": {
+                    "position": [0.0, 0.0],
+                    "scale": [1.0, 1.0],
+                    "rotation": 0.0,
+                    "opacity": 1.0
+                },
+                "bindings": []
+            },
+            "post_effects": [
+                {
+                    "type": "Bloom",
+                    "threshold": 0.7,
+                    "intensity": 1.5,
+                    "radius": 5.0
+                }
+            ]
+        },
+        "effects": {
+            "slowed": true,
+            "nightcore": false,
+            "bass_boost_db": 6.5,
+            "reverb": 0.4,
+            "eight_d": true
+        },
+        "width": 1920,
+        "height": 1080,
+        "fps": 60
+    });
+
+    let json_str = studio_payload_json.to_string();
+    let export_req: openviz_core::server::routes::ExportRequest =
+        serde_json::from_str(&json_str).expect("Failed to deserialize Studio ExportRequest");
+
+    assert_eq!(export_req.audio_path, "static/uploads/test.mp3");
+    assert_eq!(export_req.template.name, "Studio Spectrum");
+    assert_eq!(export_req.width, 1920);
+    assert_eq!(export_req.height, 1080);
+    assert_eq!(export_req.fps, 60);
+
+    let fx = export_req.effects.expect("Effects expected");
+    assert!(fx.slowed);
+    assert!(!fx.nightcore);
+    assert_eq!(fx.bass_boost_db, Some(6.5));
+    assert_eq!(fx.reverb, Some(0.4));
+    assert!(fx.eight_d);
+
+    if let openviz_core::scene::node::NodeType::Group { ref children } =
+        export_req.template.root.node_type
+    {
+        assert_eq!(children.len(), 2);
+        if let openviz_core::scene::node::NodeType::Bars {
+            inner_radius,
+            width,
+            ..
+        } = children[0].node_type
+        {
+            assert_eq!(inner_radius, 0.25);
+            assert_eq!(width, 0.015);
+        } else {
+            panic!("Expected Bars node for first child");
+        }
+    } else {
+        panic!("Expected Group node for root");
+    }
+}
