@@ -1,6 +1,7 @@
 pub mod routes;
 
 use axum::{
+    extract::DefaultBodyLimit,
     routing::{get, post},
     Router,
 };
@@ -21,6 +22,7 @@ pub fn create_router() -> Router {
         .route("/api/export", post(routes::handle_export))
         .nest_service("/uploads", ServeDir::new("static/uploads"))
         .nest_service("/downloads", ServeDir::new("static/downloads"))
+        .layer(DefaultBodyLimit::max(100 * 1024 * 1024))
         .layer(CorsLayer::permissive())
 }
 

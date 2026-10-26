@@ -240,3 +240,44 @@ async fn test_studio_export_request_deserialization_and_template_schema() {
         panic!("Expected Group node for root");
     }
 }
+
+#[tokio::test]
+async fn test_post_upload_large_file_over_2mb() {
+    let app = create_router();
+
+    let boundary = "------------------------1234567890";
+    let header_part = format!(
+        "--{}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"large.mp3\"\r\nContent-Type: audio/mpeg\r\n\r\n",
+        boundary
+    );
+    let footer_part = format!("\r\n--{}--\r\n", boundary);
+
+    // Create a 2.5MB payload (exceeding Axum's default 2MB limit)
+    let padding_size = 2_500_000;
+    let mut body_bytes = Vec::with_capacity(header_part.len() + padding_size + footer_part.len());
+    body_bytes.extend_from_slice(header_part.as_bytes());
+    body_bytes.resize(header_part.len() + padding_size, b'A');
+    body_bytes.extend_from_slice(footer_part.as_bytes());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/upload")
+                .header(
+                    header::CONTENT_TYPE,
+                    format!("multipart/form-data; boundary={}", boundary),
+                )
+                .body(Body::from(body_bytes))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let response_body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&response_body).unwrap();
+    assert_eq!(json["filename"], "large.mp3");
+}

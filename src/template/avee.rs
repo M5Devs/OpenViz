@@ -22,7 +22,7 @@ pub enum AveeImportError {
     PathTraversal(String),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct RawProp {
     #[serde(default)]
     pub v: Option<Value>,
@@ -40,6 +40,86 @@ pub struct RawProp {
     pub children: BTreeMap<String, RawProp>,
 }
 
+#[derive(Deserialize)]
+struct RawPropEnvelope {
+    #[serde(default)]
+    pub v: Option<Value>,
+
+    #[serde(default)]
+    pub t: Option<String>,
+
+    #[serde(default)]
+    pub o: Option<i32>,
+
+    #[serde(default)]
+    pub tag: Option<String>,
+
+    #[serde(default)]
+    pub children: BTreeMap<String, RawProp>,
+
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, RawProp>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RawPropHelper {
+    Envelope(RawPropEnvelope),
+    Primitive(Value),
+}
+
+impl<'de> Deserialize<'de> for RawProp {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let helper = RawPropHelper::deserialize(deserializer)?;
+        Ok(match helper {
+            RawPropHelper::Envelope(mut env) => {
+                for (k, v) in env.extra {
+                    env.children.entry(k).or_insert(v);
+                }
+                RawProp {
+                    v: env.v,
+                    t: env.t,
+                    o: env.o,
+                    tag: env.tag,
+                    children: env.children,
+                }
+            }
+            RawPropHelper::Primitive(val) => {
+                let v = if val.is_null() { None } else { Some(val) };
+                RawProp {
+                    v,
+                    t: None,
+                    o: None,
+                    tag: None,
+                    children: BTreeMap::new(),
+                }
+            }
+        })
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum CompositionsHelper {
+    Seq(Vec<RawProp>),
+    One(RawProp),
+}
+
+fn deserialize_compositions<'de, D>(deserializer: D) -> Result<Vec<RawProp>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let opt = Option::<CompositionsHelper>::deserialize(deserializer)?;
+    Ok(match opt {
+        Some(CompositionsHelper::Seq(vec)) => vec,
+        Some(CompositionsHelper::One(prop)) => vec![prop],
+        None => Vec::new(),
+    })
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AveeRoot {
     #[serde(default)]
@@ -48,7 +128,7 @@ pub struct AveeRoot {
     #[serde(default)]
     pub root: Option<RawProp>,
 
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_compositions")]
     pub compositions: Vec<RawProp>,
 
     #[serde(flatten)]
@@ -998,5 +1078,80 @@ mod tests {
         } else {
             panic!("Expected root group node");
         }
+    }
+
+    #[test]
+    fn test_resilient_raw_prop_primitives() {
+        // Integer 0 primitive
+        let int_prop: RawProp = serde_json::from_str("0").unwrap();
+        assert_eq!(int_prop.as_i32_or(-1), 0);
+        assert_eq!(int_prop.as_f32(), Some(0.0));
+        assert_eq!(int_prop.as_bool_or(true), false);
+
+        // String primitive
+        let str_prop: RawProp = serde_json::from_str(r#""hello""#).unwrap();
+        assert_eq!(str_prop.as_str(), Some("hello".to_string()));
+
+        // Boolean primitive
+        let bool_prop: RawProp = serde_json::from_str("true").unwrap();
+        assert_eq!(bool_prop.as_bool_or(false), true);
+
+        // Array primitive
+        let arr_prop: RawProp = serde_json::from_str("[10.0, 20.0]").unwrap();
+        assert_eq!(arr_prop.as_f32_tuple2(), Some([10.0, 20.0]));
+
+        // Object with inline scalar fields
+        let inline_obj: RawProp =
+            serde_json::from_str(r#"{"t": "Bars", "barCount": 128, "customFlag": true}"#).unwrap();
+        assert_eq!(inline_obj.t.as_deref(), Some("Bars"));
+        assert_eq!(
+            inline_obj.children.get("barCount").unwrap().as_i32_or(0),
+            128
+        );
+        assert_eq!(
+            inline_obj
+                .children
+                .get("customFlag")
+                .unwrap()
+                .as_bool_or(false),
+            true
+        );
+    }
+
+    #[test]
+    fn test_import_viz_resilient_scene_with_scalars_and_primitives() {
+        let scene_json = serde_json::json!({
+            "ver": 2,
+            "compositions": 0, // Integer instead of array
+            "root": {
+                "t": "root",
+                "children": {
+                    "bar_element": {
+                        "tag": "Bars",
+                        "t": "Bars",
+                        "barCount": 64, // Primitive integer key directly on object
+                        "barWidth": 3.0,
+                        "unhandledScalar": 0, // Primitive integer 0 that previously caused serde crash
+                        "unhandledBool": false,
+                        "unhandledString": "metadata"
+                    }
+                }
+            }
+        });
+
+        let mut buffer = Vec::new();
+        {
+            let mut zip = ZipWriter::new(Cursor::new(&mut buffer));
+            let options = SimpleFileOptions::default();
+
+            zip.start_file("scene.json", options).unwrap();
+            zip.write_all(scene_json.to_string().as_bytes()).unwrap();
+            zip.finish().unwrap();
+        }
+
+        let template = import_viz_from_reader(Cursor::new(buffer))
+            .expect("import_viz must succeed even with primitive properties and raw scalars");
+
+        assert_eq!(template.name, "Imported Avee Template");
     }
 }
