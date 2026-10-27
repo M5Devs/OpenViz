@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenViz Web Studio</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236366f1' stroke-width='2'><polygon points='12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2'/></svg>" />
+  </head>
+  <body class="bg-slate-950 text-slate-100 h-screen w-screen overflow-hidden flex flex-col font-sans select-none">
+    <!-- Header Bar -->
+    <header class="h-12 border-b border-white/10 bg-slate-900/80 backdrop-blur-md px-4 flex items-center justify-between z-20">
+      <div class="flex items-center gap-3">
+        <div class="flex items-center gap-2 font-bold text-lg text-indigo-400">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 .895-2 3-2 3 .895 3 2zm12 0c0 1.105-1.343 2-3 2s-3-.895-3-2 .895-2 3-2 3 .895 3 2zM9 10l12-3"></path></svg>
+          OpenViz Studio
+        </div>
+        <span class="text-xs px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">Web-Native</span>
+      </div>
+
+      <div class="flex items-center gap-3">
+        <label class="cursor-pointer px-3 py-1.5 text-xs font-medium rounded-lg bg-white/10 hover:bg-white/15 border border-white/10 transition flex items-center gap-1.5">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
+          Import .viz Template
+          <input type="file" id="templateInput" accept=".viz,.json" class="hidden" />
+        </label>
+
+        <label class="cursor-pointer px-3 py-1.5 text-xs font-medium rounded-lg bg-white/10 hover:bg-white/15 border border-white/10 transition flex items-center gap-1.5">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 .895-2 3-2 3 .895 3 2zm12 0c0 1.105-1.343 2-3 2s-3-.895-3-2 .895-2 3-2 3 .895 3 2zM9 10l12-3"></path></svg>
+          Load Audio MP3
+          <input type="file" id="audioInput" accept="audio/*" class="hidden" />
+        </label>
+
+        <button id="exportBtn" class="px-4 py-1.5 text-xs font-semibold rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white transition shadow-lg shadow-indigo-600/30 flex items-center gap-1.5">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4 4m0 0l-4 4m4-4H3"></path></svg>
+          Export MP4
+        </button>
+      </div>
+    </header>
+
+    <!-- 3-Panel Main Layout -->
+    <div class="flex-1 flex overflow-hidden relative">
+      <!-- Left Panel: Layers Tree & Audio DSP -->
+      <aside class="w-72 border-r border-white/10 bg-slate-900/60 backdrop-blur-md flex flex-col z-10">
+        <!-- Layers Section -->
+        <div class="p-3 border-b border-white/10">
+          <div class="flex items-center justify-between mb-2">
+            <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Layers</h2>
+            <div class="flex items-center gap-1">
+              <button id="addBarsBtn" class="p-1 hover:bg-white/10 rounded text-slate-300 text-xs" title="Add Spectrum Bars">+ Bars</button>
+              <button id="addImageBtn" class="p-1 hover:bg-white/10 rounded text-slate-300 text-xs" title="Add Image Layer">+ Image</button>
+              <button id="addTextBtn" class="p-1 hover:bg-white/10 rounded text-slate-300 text-xs" title="Add Text Layer">+ Text</button>
+            </div>
+          </div>
+          <div id="layersList" class="space-y-1 max-h-48 overflow-y-auto pr-1"></div>
+        </div>
+
+        <!-- Audio DSP Controls -->
+        <div class="p-3 flex-1 overflow-y-auto space-y-4">
+          <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Real-Time Audio DSP</h2>
+
+          <!-- Bass Boost -->
+          <div class="bg-white/5 p-2.5 rounded-lg border border-white/5 space-y-2">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-medium text-slate-200">Bass Boost</span>
+              <span id="bassBoostVal" class="text-xs text-indigo-400 font-mono">0 dB</span>
+            </div>
+            <input type="range" id="bassBoostSlider" min="0" max="18" value="0" step="1" class="w-full accent-indigo-500 cursor-pointer h-1 bg-slate-700 rounded-lg appearance-none" />
+          </div>
+
+          <!-- Slowed + Reverb -->
+          <div class="bg-white/5 p-2.5 rounded-lg border border-white/5 flex items-center justify-between">
+            <span class="text-xs font-medium text-slate-200">Slowed + Reverb</span>
+            <input type="checkbox" id="slowedToggle" class="accent-indigo-500 w-4 h-4 cursor-pointer" />
+          </div>
+
+          <!-- Nightcore / Sped Up -->
+          <div class="bg-white/5 p-2.5 rounded-lg border border-white/5 flex items-center justify-between">
+            <span class="text-xs font-medium text-slate-200">Nightcore (1.25x)</span>
+            <input type="checkbox" id="nightcoreToggle" class="accent-indigo-500 w-4 h-4 cursor-pointer" />
+          </div>
+
+          <!-- 8D Audio Panning -->
+          <div class="bg-white/5 p-2.5 rounded-lg border border-white/5 flex items-center justify-between">
+            <span class="text-xs font-medium text-slate-200">8D Audio Panning</span>
+            <input type="checkbox" id="eightDToggle" class="accent-indigo-500 w-4 h-4 cursor-pointer" />
+          </div>
+        </div>
+      </aside>
+
+      <!-- Center Panel: Canvas Viewport -->
+      <main class="flex-1 bg-black relative flex items-center justify-center overflow-hidden">
+        <canvas id="studioCanvas" class="w-full h-full object-contain cursor-crosshair"></canvas>
+      </main>
+
+      <!-- Right Panel: Property Inspector -->
+      <aside id="inspectorPanel" class="w-80 border-l border-white/10 bg-slate-900/60 backdrop-blur-md p-4 flex flex-col space-y-4 overflow-y-auto z-10">
+        <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Property Inspector</h2>
+        <div id="inspectorContent" class="space-y-4 text-xs text-slate-400">
+          Select a layer from the left panel or click an element on canvas to edit its properties.
+        </div>
+      </aside>
+    </div>
+
+    <!-- Bottom Timeline Bar -->
+    <footer class="h-16 border-t border-white/10 bg-slate-900/90 backdrop-blur-md px-4 flex items-center gap-4 z-20">
+      <button id="playPauseBtn" class="p-2 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white transition shadow-lg shadow-indigo-600/30">
+        <svg id="playIcon" class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd"></path></svg>
+      </button>
+
+      <span id="timeDisplay" class="font-mono text-xs text-slate-300 w-24">00:00 / 00:00</span>
+
+      <input type="range" id="timelineScrubber" min="0" max="100" value="0" step="0.1" class="flex-1 accent-indigo-500 cursor-pointer h-1.5 bg-slate-700 rounded-lg appearance-none" />
+    </footer>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
