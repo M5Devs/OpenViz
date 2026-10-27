@@ -1,39 +1,62 @@
-# OpenViz Core
+# OpenViz
 
-**OpenViz Core** is a high-performance, modular audio visualizer and multimedia processing engine written in pure Rust. It combines low-latency audio feature extraction, non-destructive DSP audio effects, wgpu hardware-accelerated rendering, an Avee Player `.viz` template importer, and a full-featured Web Studio.
+**OpenViz** is a modern, web-native creative suite and audio visualizer inspired by Vizzy.io. Built entirely on a pure TypeScript/Web stack, OpenViz offers real-time audio reactivity, non-destructive DSP audio effects, interactive visual element editing, and hardware-accelerated video rendering directly in the browser.
+
+---
+
+## Stack Architecture
+
+- **Core Renderer:** TypeScript + Three.js (`three`)
+- **Audio DSP Pipeline:** WebAudio API (`AnalyserNode`, `BiquadFilterNode`, `StereoPannerNode`, `DelayNode`)
+- **Video Exporter:** Hardware-accelerated WebCodecs (`VideoEncoder`) with `mp4-muxer` (AVC H.264)
+- **Avee Template Importer:** `jszip` for parsing legacy `.viz` templates and local assets
+- **Interactive Web Studio:** Vite + Glassmorphic UI with Three.js `TransformControls` (live on-canvas Gizmo)
+- **Terminal CLI:** Node.js CLI (`bin/openviz.js`) using `commander` for template inspection and utilities
+- **Styling & Testing:** TailwindCSS + Vitest
 
 ---
 
 ## Features
 
-- **Pure Rust DSP Audio Engine**:
-  - Real-time FFT spectral analysis, multi-band RMS partitioning (Bass, Mid, High), Onset/Beat detection, and Automatic Gain Control (AGC).
-  - Non-destructive audio effects: Slowed + Reverb, Nightcore/Sped-Up, Low-shelf biquad Bass Boost, Stereo Freeverb, Cross-feedback Delay, and 8D Equal-Power Auto-Panning.
-- **wgpu / WGSL Rendering Engine**:
-  - Hardware-accelerated offscreen rendering with 2D quad batching and dynamic transform hierarchies.
-  - Support for `NodeType::Group` recursion, standard horizontal spectrum bars, and true radial bar layouts.
-  - Dynamic clear colors, linear gradient fills, and customizable post-processing effects.
-- **Avee Template Importer**:
-  - Native deserialization and conversion of Avee Player `.viz` template archives into OpenViz scene graphs.
-  - Resilient JSON property parsing handling raw scalar primitives and flexible property representations.
-- **Web Studio & API Server**:
-  - Axum-powered REST API and embedded interactive Web Studio interface.
-  - Secure upload handling with file type validation, UUID filename sanitization, and path traversal defense.
-  - Offline video export engine leveraging FFmpeg for crisp 1080p/4K video generation.
+- **Live Glassmorphic Web Studio**:
+  - Fullscreen WebGL viewport with interactive on-canvas handles for translation, scaling, and rotation.
+  - Layer tree manager for adding Spectrum Bars, Images, and Text.
+  - Property Inspector for live tweaking of transforms, colors, and audio reactivity bindings.
+  - Waveform timeline scrubber and audio playback controls.
+- **Real-Time WebAudio DSP Effects**:
+  - **Bass Boost:** Low-shelf biquad filter at 120Hz (+0dB to +18dB).
+  - **Slowed + Reverb:** Pitch-altered playback (0.85x) with cross-feedback delay network.
+  - **Nightcore:** Sped-up playback rate (1.25x).
+  - **8D Audio:** Smooth continuous LFO stereo panning.
+  - **64-Band Spectrum Analysis:** Normalized FFT partitioning for Bass, Mid, High, Beat, and RMS reactivity.
+- **Client-Side WebCodecs Video Export**:
+  - Frame-by-frame offline rendering at 1080p 60fps with H.264 hardware acceleration.
+  - Fast in-memory MP4 muxing via `mp4-muxer` for instant MP4 video downloads.
+- **Avee `.viz` Importer**:
+  - Unzips and converts `.viz` archives and `scene.json` into clean OpenViz JSON schema.
+  - Extracts local asset image buffers into textures.
+  - Maps audio reactivity measures (`Beat`, `Bass`, `Mid`, `High`, `RMS`) to scale, rotation, height, and opacity bindings.
+  - Built-in path traversal security protection for ZIP entries.
 
 ---
 
-## Prerequisites
-
-- **Rust Toolchain**: Rust 1.75+ (`cargo`, `rustc`).
-- **FFmpeg**: Required for offline video export (`ffmpeg` binary must be on system `PATH`).
-- **System Libraries (Linux)**:
-  - `libasound2-dev` (ALSA development files)
-  - `pkg-config`
+## Quick Start
 
 ```bash
-# Ubuntu / Debian
-sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config ffmpeg
+# 1. Install dependencies
+npm install
+
+# 2. Launch Web Studio local development server
+npm run dev
+
+# 3. Build production bundle
+npm run build
+
+# 4. Run Vitest unit tests
+npm test
+
+# 5. Run OpenViz Terminal CLI
+node bin/openviz.js --help
 ```
 
 ---
@@ -41,58 +64,18 @@ sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config ffmpeg
 ## CLI Usage
 
 ```bash
-# Build the binary
-cargo build --release
+# Inspect a .viz template archive
+node bin/openviz.js info template.viz
 
-# Show help
-./target/release/openviz --help
+# Convert a .viz archive to OpenViz JSON schema
+node bin/openviz.js convert template.viz -o output_template.json
+
+# Launch local Vite studio server via CLI
+node bin/openviz.js dev
 ```
-
-### Subcommands
-
-1. **Export Video** (`export`):
-   Render an audio track into an MP4 visualizer video using a template.
-   ```bash
-   openviz export --audio track.mp3 --template template.json --output output.mp4 --width 1920 --height 1080 --fps 60
-   ```
-   *Audio Presets*:
-   - `--slowed`: Apply Slowed + Reverb effect.
-   - `--nightcore`: Apply Nightcore / Sped-Up effect.
-   - `--bass-boost <DB>`: Apply low-shelf bass boost in dB.
-   - `--eight-d`: Enable 8D auto-panning.
-
-2. **Generate Template** (`generate-template`):
-   Create a default spectrum visualizer template JSON file.
-   ```bash
-   openviz generate-template --output template.json
-   ```
-
-3. **Template & Audio Info** (`info`):
-   Inspect template structure and audio track metadata.
-   ```bash
-   openviz info --template template.json --audio track.mp3
-   ```
-
-4. **Launch Web Studio Server** (`serve`):
-   Start the interactive Web Studio local server.
-   ```bash
-   openviz serve --host 127.0.0.1 --port 3000
-   ```
-
----
-
-## Web Studio
-
-Start the server using `openviz serve` and navigate to `http://127.0.0.1:3000` in your web browser to access Web Studio.
-
-Features:
-- Live visualizer preview.
-- Import `.viz` templates directly.
-- Tweak audio DSP effects in real time.
-- Export full videos directly from the browser interface.
 
 ---
 
 ## License
 
-This project is licensed under the GPL-3.0-or-later license. See [LICENSE](LICENSE) for details.
+This project is licensed under the GNU General Public License v3.0 or later (GPL-3.0-or-later). See [LICENSE](LICENSE) for details.
