@@ -163,7 +163,7 @@ struct ServeArgs {
     port: u16,
 
     /// Host IP address to bind to
-    #[arg(short = 'H', long, default_value = "0.0.0.0")]
+    #[arg(short = 'H', long, default_value = "127.0.0.1")]
     host: String,
 }
 
@@ -323,6 +323,12 @@ fn run_info(args: InfoArgs) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn run_export(args: ExportArgs) -> Result<(), Box<dyn std::error::Error>> {
+    if args.slowed && args.nightcore {
+        return Err(
+            "The --slowed and --nightcore presets are mutually exclusive. Please specify only one."
+                .into(),
+        );
+    }
     let mut track = decode_file(&args.audio)?;
 
     let mut effect_config = AudioEffectConfig::default();
@@ -477,7 +483,7 @@ fn run_export(args: ExportArgs) -> Result<(), Box<dyn std::error::Error>> {
         let mut scene = template.root.clone();
         scene.apply_bindings(&features);
 
-        renderer.render_frame(&scene, &features)?;
+        renderer.render_frame(&scene, &features, template.clear_color)?;
         let pixels = renderer.capture_pixels()?;
 
         ffmpeg_stdin.write_all(&pixels)?;

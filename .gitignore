@@ -1,1 +1,6 @@
-target/
+/target
+static/uploads/*
+!static/uploads/.gitkeep
+*.mp4
+*.ovz
+*.viz
