@@ -28,7 +28,9 @@ pub struct OffscreenRenderer {
 
 struct BarParams {
     count: usize,
+    inner_radius: f32,
     width: f32,
+    is_radial: bool,
     color_start: [f32; 4],
     color_end: [f32; 4],
 }
@@ -157,6 +159,7 @@ impl OffscreenRenderer {
         &mut self,
         scene: &crate::scene::node::SceneNode,
         features: &AudioFeatures,
+        clear_color: [f32; 4],
     ) -> Result<(), RenderError> {
         let mut encoder =
             self.gpu_context
@@ -173,10 +176,10 @@ impl OffscreenRenderer {
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.05,
-                            g: 0.05,
-                            b: 0.05,
-                            a: 1.0,
+                            r: clear_color[0] as f64,
+                            g: clear_color[1] as f64,
+                            b: clear_color[2] as f64,
+                            a: clear_color[3] as f64,
                         }),
                         store: wgpu::StoreOp::Store,
                     },
@@ -238,15 +241,17 @@ impl OffscreenRenderer {
             }
             NodeType::Bars {
                 count,
-                inner_radius: _,
+                inner_radius,
                 width,
-                is_radial: _,
+                is_radial,
                 color_start,
                 color_end,
             } => {
                 let bar_params = BarParams {
                     count: *count,
+                    inner_radius: *inner_radius,
                     width: *width,
+                    is_radial: *is_radial,
                     color_start: *color_start,
                     color_end: *color_end,
                 };
@@ -302,37 +307,71 @@ impl OffscreenRenderer {
         }
 
         let spectrum = &features.raw_spectrum;
-        let total_width = 1.8f32; // Fit nicely within clip space
-        let step = total_width / bar_params.count as f32;
 
-        for i in 0..bar_params.count {
-            let magnitude = if i < spectrum.len() {
-                spectrum[i]
-            } else {
-                features.bass
-            };
+        if bar_params.is_radial {
+            for i in 0..bar_params.count {
+                let magnitude = if i < spectrum.len() { spectrum[i] } else { 0.0 };
 
-            let height = (magnitude * 1.5).clamp(0.02, 1.0);
-            let x_pos = -total_width / 2.0 + i as f32 * step + step / 2.0;
-            let y_pos = 0.0;
+                let height = (magnitude * 1.5).clamp(0.02, 1.0);
+                let angle = (i as f32 / bar_params.count as f32) * 2.0 * std::f32::consts::PI;
+                let r_mid = bar_params.inner_radius + height / 2.0;
+                let center_x = angle.cos() * r_mid;
+                let center_y = angle.sin() * r_mid;
+                let rot_angle = angle - std::f32::consts::FRAC_PI_2;
 
-            let bar_local_matrix = [
-                [bar_params.width.max(step * 0.8), 0.0, 0.0, 0.0],
-                [0.0, height, 0.0, 0.0],
-                [0.0, 0.0, 1.0, 0.0],
-                [x_pos, y_pos, 0.0, 1.0],
-            ];
+                let cos_rot = rot_angle.cos();
+                let sin_rot = rot_angle.sin();
 
-            let final_matrix = multiply_mat4(world_matrix, &bar_local_matrix);
+                let bar_width = bar_params.width;
+                let bar_height = height;
 
-            self.draw_quad(
-                render_pass,
-                bar_params.color_start,
-                bar_params.color_end,
-                1, // Linear gradient
-                &final_matrix,
-                opacity,
-            );
+                let bar_local_matrix = [
+                    [bar_width * cos_rot, bar_width * sin_rot, 0.0, 0.0],
+                    [-bar_height * sin_rot, bar_height * cos_rot, 0.0, 0.0],
+                    [0.0, 0.0, 1.0, 0.0],
+                    [center_x, center_y, 0.0, 1.0],
+                ];
+
+                let final_matrix = multiply_mat4(world_matrix, &bar_local_matrix);
+
+                self.draw_quad(
+                    render_pass,
+                    bar_params.color_start,
+                    bar_params.color_end,
+                    1, // Linear gradient
+                    &final_matrix,
+                    opacity,
+                );
+            }
+        } else {
+            let total_width = 1.8f32; // Fit nicely within clip space
+            let step = total_width / bar_params.count as f32;
+
+            for i in 0..bar_params.count {
+                let magnitude = if i < spectrum.len() { spectrum[i] } else { 0.0 };
+
+                let height = (magnitude * 1.5).clamp(0.02, 1.0);
+                let x_pos = -total_width / 2.0 + i as f32 * step + step / 2.0;
+                let y_pos = 0.0;
+
+                let bar_local_matrix = [
+                    [bar_params.width.max(step * 0.8), 0.0, 0.0, 0.0],
+                    [0.0, height, 0.0, 0.0],
+                    [0.0, 0.0, 1.0, 0.0],
+                    [x_pos, y_pos, 0.0, 1.0],
+                ];
+
+                let final_matrix = multiply_mat4(world_matrix, &bar_local_matrix);
+
+                self.draw_quad(
+                    render_pass,
+                    bar_params.color_start,
+                    bar_params.color_end,
+                    1, // Linear gradient
+                    &final_matrix,
+                    opacity,
+                );
+            }
         }
     }
 

@@ -38,7 +38,7 @@ fn test_headless_offscreen_renderer_lifecycle() {
     };
 
     renderer
-        .render_frame(&dummy_scene, &features)
+        .render_frame(&dummy_scene, &features, [0.05, 0.05, 0.08, 1.0])
         .expect("render_frame failed");
 
     let pixels = renderer.capture_pixels().expect("capture_pixels failed");
@@ -77,7 +77,7 @@ fn test_offscreen_renderer_resize() {
     };
 
     renderer
-        .render_frame(&dummy_scene, &features)
+        .render_frame(&dummy_scene, &features, [0.05, 0.05, 0.08, 1.0])
         .expect("render_frame failed");
 
     let pixels = renderer.capture_pixels().expect("capture_pixels failed");

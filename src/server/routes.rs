@@ -205,12 +205,28 @@ pub async fn handle_upload(
 
     if let Ok(Some(field)) = multipart.next_field().await {
         let original_filename = field.file_name().unwrap_or("uploaded_file").to_string();
-        let sanitized = sanitize_filename::sanitize(&original_filename);
-        let timestamp = std::time::SystemTime::now()
+        let path = std::path::Path::new(&original_filename);
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+
+        let allowed_exts = ["mp3", "wav", "ogg", "flac", "png", "jpg", "jpeg", "viz"];
+        if !allowed_exts.contains(&ext.as_str()) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("File extension '.{}' is not allowed", ext),
+            ));
+        }
+
+        let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
+        let sanitized_stem = sanitize_filename::sanitize(file_stem);
+        let unique_id = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_millis();
-        let target_filename = format!("{}_{}", timestamp, sanitized);
+            .as_nanos();
+        let target_filename = format!("{}_{}.{}", sanitized_stem, unique_id, ext);
         let file_path = upload_dir.join(&target_filename);
 
         let bytes = field.bytes().await.map_err(|e| {
@@ -243,13 +259,52 @@ pub async fn handle_upload(
 pub async fn handle_export(
     Json(req): Json<ExportRequest>,
 ) -> Result<Json<ExportResponse>, (StatusCode, String)> {
-    let audio_path = PathBuf::from(&req.audio_path);
-    if !audio_path.exists() {
+    // Validate resource bounds
+    if req.width < 128 || req.width > 3840 {
         return Err((
             StatusCode::BAD_REQUEST,
-            format!("Audio file not found at path: {}", req.audio_path),
+            format!("Width must be between 128 and 3840, got {}", req.width),
         ));
     }
+    if req.height < 128 || req.height > 2160 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("Height must be between 128 and 2160, got {}", req.height),
+        ));
+    }
+    if req.fps < 15 || req.fps > 60 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("FPS must be between 15 and 60, got {}", req.fps),
+        ));
+    }
+
+    // Path traversal defense
+    let raw_audio_path = PathBuf::from(&req.audio_path);
+    let canonical_audio_path = raw_audio_path.canonicalize().map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("Invalid audio file path: {}", e),
+        )
+    })?;
+
+    let canonical_uploads_dir = PathBuf::from("static/uploads")
+        .canonicalize()
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Uploads directory missing or invalid: {}", e),
+            )
+        })?;
+
+    if !canonical_audio_path.starts_with(&canonical_uploads_dir) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "Access denied: Audio path must reside inside static/uploads/".to_string(),
+        ));
+    }
+
+    let audio_path = canonical_audio_path;
 
     let downloads_dir = PathBuf::from("static/downloads");
     if let Err(e) = std::fs::create_dir_all(&downloads_dir) {
@@ -403,7 +458,7 @@ pub async fn handle_export(
             scene.apply_bindings(&features);
 
             renderer
-                .render_frame(&scene, &features)
+                .render_frame(&scene, &features, req.template.clear_color)
                 .map_err(|e| format!("Render frame error: {}", e))?;
             let pixels = renderer
                 .capture_pixels()

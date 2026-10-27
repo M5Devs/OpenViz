@@ -59,6 +59,52 @@ impl AudioEffectConfig {
         }
     }
 
+    pub fn sanitize(&mut self) {
+        if self.speed.is_nan() || self.speed.is_infinite() || self.speed <= 0.0 {
+            self.speed = 1.0;
+        }
+        self.speed = self.speed.clamp(0.1, 4.0);
+
+        if self.bass_boost_db.is_nan() || self.bass_boost_db.is_infinite() {
+            self.bass_boost_db = 0.0;
+        }
+        self.bass_boost_db = self.bass_boost_db.clamp(0.0, 18.0);
+
+        if self.reverb_wet.is_nan() || self.reverb_wet.is_infinite() {
+            self.reverb_wet = 0.0;
+        }
+        self.reverb_wet = self.reverb_wet.clamp(0.0, 1.0);
+
+        if self.reverb_room_size.is_nan() || self.reverb_room_size.is_infinite() {
+            self.reverb_room_size = 0.7;
+        }
+        self.reverb_room_size = self.reverb_room_size.clamp(0.0, 1.0);
+
+        if self.delay_wet.is_nan() || self.delay_wet.is_infinite() {
+            self.delay_wet = 0.0;
+        }
+        self.delay_wet = self.delay_wet.clamp(0.0, 1.0);
+
+        if self.delay_feedback.is_nan() || self.delay_feedback.is_infinite() {
+            self.delay_feedback = 0.0;
+        }
+        self.delay_feedback = self.delay_feedback.clamp(0.0, 0.85);
+
+        if self.delay_time_ms.is_nan()
+            || self.delay_time_ms.is_infinite()
+            || self.delay_time_ms < 0.0
+        {
+            self.delay_time_ms = 0.0;
+        }
+
+        if self.eight_d_speed_hz.is_nan()
+            || self.eight_d_speed_hz.is_infinite()
+            || self.eight_d_speed_hz <= 0.0
+        {
+            self.eight_d_speed_hz = 0.15;
+        }
+    }
+
     /// Bass Boost preset with specified dB gain.
     pub fn bass_boosted(db: f32) -> Self {
         Self {
@@ -157,6 +203,10 @@ pub fn process_audio_buffer(
     if samples.is_empty() || channels == 0 || sample_rate == 0 {
         return (Vec::new(), sample_rate);
     }
+
+    let mut config = config.clone();
+    config.sanitize();
+    let config = &config;
 
     // 1. Resampling (Speed / Pitch scaling)
     let current_samples = if (config.speed - 1.0).abs() > 1e-4 && config.speed > 0.0 {
@@ -312,9 +362,9 @@ pub fn process_audio_buffer(
         for i in 0..total_frames {
             let t = i as f32 / fs;
             let pan = (2.0 * PI * config.eight_d_speed_hz * t).sin();
-            let angle = (pan + 1.0) * (PI / 4.0);
-            let l_gain = angle.cos() * (2.0f32).sqrt();
-            let r_gain = angle.sin() * (2.0f32).sqrt();
+            let angle = pan * (PI / 4.0);
+            let l_gain = (angle + std::f32::consts::FRAC_PI_4).cos().abs().min(1.0);
+            let r_gain = (angle + std::f32::consts::FRAC_PI_4).sin().abs().min(1.0);
 
             let l_idx = i * channels;
             let r_idx = i * channels + 1;

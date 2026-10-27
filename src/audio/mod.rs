@@ -39,7 +39,11 @@ pub struct AudioAnalyzer {
 impl AudioAnalyzer {
     pub fn new(sample_rate: u32, fft_size: usize) -> Self {
         let sample_rate = if sample_rate == 0 { 44100 } else { sample_rate };
-        let fft_size = if fft_size == 0 { 2048 } else { fft_size };
+        let fft_size = if fft_size < 64 || !fft_size.is_power_of_two() {
+            2048
+        } else {
+            fft_size
+        };
 
         let mut planner = FftPlanner::<f32>::new();
         let fft = planner.plan_fft_forward(fft_size);
