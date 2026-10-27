@@ -46,16 +46,17 @@ if (typeof (globalThis as any).window.AudioContext === 'undefined') {
     pan = new MockParam();
   }
   class MockAnalyser extends MockAudioNode {
-    fftSize = 128;
-    frequencyBinCount = 64;
+    fftSize = 4096;
+    frequencyBinCount = 2048;
     smoothingTimeConstant = 0.8;
-    getByteFrequencyData(array: Uint8Array) {
-      array.fill(128);
+    getFloatTimeDomainData(array: Float32Array) {
+      array.fill(0);
     }
   }
 
   class MockAudioContext {
     currentTime = 0;
+    sampleRate = 44100;
     state = 'running';
     destination = new MockAudioNode();
     createMediaElementSource() { return new MockAudioNode(); }
