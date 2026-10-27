@@ -2,9 +2,12 @@ import * as THREE from 'three';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { OpenVizTemplate, OpenVizNode, FrequencyData, AudioBinding } from '../types';
 
+const VIEW_WIDTH = 1920;
+const VIEW_HEIGHT = 1080;
+
 export class VisualizerScene {
   public scene: THREE.Scene;
-  public camera: THREE.PerspectiveCamera;
+  public camera: THREE.OrthographicCamera;
   public renderer: THREE.WebGLRenderer;
   public transformControls: TransformControls | null = null;
 
@@ -21,9 +24,16 @@ export class VisualizerScene {
     this.canvas = canvas;
     this.scene = new THREE.Scene();
 
-    const aspect = canvas.clientWidth / canvas.clientHeight || 16 / 9;
-    this.camera = new THREE.PerspectiveCamera(50, aspect, 0.1, 1000);
+    this.camera = new THREE.OrthographicCamera(
+      -VIEW_WIDTH / 2,
+      VIEW_WIDTH / 2,
+      VIEW_HEIGHT / 2,
+      -VIEW_HEIGHT / 2,
+      -1000,
+      1000
+    );
     this.camera.position.set(0, 0, 100);
+    this.camera.lookAt(0, 0, 0);
 
     this.renderer = new THREE.WebGLRenderer({
       canvas: this.canvas,
@@ -41,6 +51,7 @@ export class VisualizerScene {
   private setupTransformControls() {
     this.transformControls = new TransformControls(this.camera, this.renderer.domElement);
     this.transformControls.size = 0.75;
+    this.transformControls.showZ = false;
     this.scene.add(this.transformControls);
 
     this.transformControls.addEventListener('change', () => {
@@ -63,7 +74,6 @@ export class VisualizerScene {
 
   private setupInteractivity() {
     this.canvas.addEventListener('pointerdown', (event: PointerEvent) => {
-      // Ignore if clicking gizmo handle directly
       if (this.transformControls?.dragging) return;
 
       const rect = this.canvas.getBoundingClientRect();
@@ -86,7 +96,6 @@ export class VisualizerScene {
         }
       }
 
-      // Deselect if background clicked
       this.selectNode(null);
     });
   }
@@ -109,27 +118,46 @@ export class VisualizerScene {
     }
   }
 
+  private getLayerIndex(node: OpenVizNode, index: number): number {
+    const nameLower = (node.name || '').toLowerCase();
+    if (nameLower.includes('background') || nameLower.includes('wallpaper') || nameLower.includes('bg')) {
+      return 0;
+    }
+    if (node.type === 'Bars') return 10 + index;
+    if (node.type === 'Image') return 20 + index;
+    if (node.type === 'Text') return 30 + index;
+    return 40 + index;
+  }
+
+  private setMeshRenderOrder(object: THREE.Object3D, renderOrder: number) {
+    object.renderOrder = renderOrder;
+    object.traverse((child) => {
+      child.renderOrder = renderOrder;
+    });
+  }
+
   public loadTemplate(template: OpenVizTemplate) {
     this.template = template;
 
-    // Clear old meshes
     this.nodeMeshMap.forEach((mesh) => {
       this.scene.remove(mesh);
     });
     this.nodeMeshMap.clear();
 
-    // Set clear color
     const [r, g, b, a] = template.clearColor;
     this.renderer.setClearColor(new THREE.Color(r, g, b), a);
 
-    // Build scene graph nodes
-    for (const node of template.nodes) {
-      const mesh = this.createNodeMesh(node, template);
+    for (let i = 0; i < template.nodes.length; i++) {
+      const node = template.nodes[i];
+      const layerIndex = this.getLayerIndex(node, i);
+      const mesh = this.createNodeMesh(node, template, layerIndex);
       mesh.userData.nodeId = node.id;
 
       mesh.position.set(node.transform.position[0], node.transform.position[1], 0);
       mesh.scale.set(node.transform.scale[0], node.transform.scale[1], 1);
       mesh.rotation.z = node.transform.rotation;
+
+      this.setMeshRenderOrder(mesh, layerIndex);
 
       this.nodeMeshMap.set(node.id, mesh);
       this.scene.add(mesh);
@@ -138,34 +166,58 @@ export class VisualizerScene {
     this.render();
   }
 
-  private createNodeMesh(node: OpenVizNode, template: OpenVizTemplate): THREE.Object3D {
+  private createNodeMesh(node: OpenVizNode, template: OpenVizTemplate, layerIndex: number): THREE.Object3D {
     const group = new THREE.Group();
 
     if (node.type === 'Bars' && node.barsData) {
-      const barsGroup = this.createSpectrumBarsGroup(node.barsData);
+      const barsGroup = this.createSpectrumBarsGroup(node.barsData, layerIndex);
       group.add(barsGroup);
     } else if (node.type === 'Image' && node.imageData) {
-      const planeMesh = this.createImagePlane(node.imageData, template);
+      const nameLower = (node.name || '').toLowerCase();
+      const isWallpaper =
+        nameLower.includes('background') ||
+        nameLower.includes('wallpaper') ||
+        nameLower.includes('bg') ||
+        (node.transform.scale[0] >= 1000 && node.transform.scale[1] >= 500);
+
+      const planeMesh = this.createImagePlane(node.imageData, template, isWallpaper, layerIndex);
       group.add(planeMesh);
     } else if (node.type === 'Text' && node.textData) {
-      const textSprite = this.createTextSprite(node.textData.text, node.textData.size);
+      const textSprite = this.createTextSprite(node.textData.text, node.textData.size, layerIndex);
       group.add(textSprite);
     } else {
-      // Default fallback geometry plane
-      const geom = new THREE.PlaneGeometry(20, 20);
-      const mat = new THREE.MeshBasicMaterial({ color: 0x6366f1, wireframe: true });
-      group.add(new THREE.Mesh(geom, mat));
+      const geom = new THREE.PlaneGeometry(360, 360);
+      const mat = new THREE.MeshBasicMaterial({
+        color: 0x6366f1,
+        wireframe: true,
+        depthTest: false,
+        depthWrite: false,
+        transparent: true,
+      });
+      const mesh = new THREE.Mesh(geom, mat);
+      mesh.renderOrder = layerIndex;
+      group.add(mesh);
     }
 
     return group;
   }
 
-  private createSpectrumBarsGroup(barsData: any): THREE.Group {
+  private createSpectrumBarsGroup(barsData: any, layerIndex: number): THREE.Group {
     const group = new THREE.Group();
     const count = barsData.count || 64;
     const isRadial = barsData.isRadial ?? true;
-    const innerRadius = barsData.innerRadius ?? 15;
-    const barWidth = barsData.width ?? 1.5;
+
+    let innerRadius = barsData.innerRadius ?? 240;
+    if (innerRadius < 2.0 && innerRadius > 0) {
+      innerRadius = 240;
+    } else if (innerRadius <= 0) {
+      innerRadius = 240;
+    }
+
+    let barWidth = barsData.width ?? 4;
+    if (barWidth <= 1.0) {
+      barWidth = 4;
+    }
 
     const cStart = barsData.colorStart
       ? new THREE.Color(barsData.colorStart[0], barsData.colorStart[1], barsData.colorStart[2])
@@ -179,15 +231,18 @@ export class VisualizerScene {
       const color = cStart.clone().lerp(cEnd, t);
 
       const geom = new THREE.PlaneGeometry(barWidth, 1);
-      // Translate origin to bottom of bar for easy scaling outward
       geom.translate(0, 0.5, 0);
 
       const mat = new THREE.MeshBasicMaterial({
         color,
         side: THREE.DoubleSide,
+        depthTest: false,
+        depthWrite: false,
+        transparent: true,
       });
 
       const barMesh = new THREE.Mesh(geom, mat);
+      barMesh.renderOrder = layerIndex;
 
       if (isRadial) {
         const angle = (i / count) * Math.PI * 2;
@@ -195,8 +250,8 @@ export class VisualizerScene {
         barMesh.position.y = Math.sin(angle) * innerRadius;
         barMesh.rotation.z = angle - Math.PI / 2;
       } else {
-        const totalWidth = count * (barWidth + 0.5);
-        barMesh.position.x = -totalWidth / 2 + i * (barWidth + 0.5);
+        const totalWidth = 1400;
+        barMesh.position.x = -totalWidth / 2 + (i + 0.5) * (totalWidth / count);
         barMesh.position.y = 0;
       }
 
@@ -209,9 +264,16 @@ export class VisualizerScene {
     return group;
   }
 
-  private createImagePlane(imageData: any, template: OpenVizTemplate): THREE.Mesh {
+  private createImagePlane(
+    imageData: any,
+    template: OpenVizTemplate,
+    isWallpaper: boolean,
+    layerIndex: number
+  ): THREE.Mesh {
     const assetUrl = imageData.url || (template.assets && template.assets[imageData.assetId]);
-    const geom = new THREE.PlaneGeometry(30, 30);
+    const width = isWallpaper ? 1920 : 360;
+    const height = isWallpaper ? 1080 : 360;
+    const geom = new THREE.PlaneGeometry(width, height);
 
     let mat: THREE.MeshBasicMaterial;
     if (assetUrl) {
@@ -222,36 +284,49 @@ export class VisualizerScene {
       mat = new THREE.MeshBasicMaterial({
         map: texture,
         transparent: true,
+        depthTest: false,
+        depthWrite: false,
         side: THREE.DoubleSide,
       });
     } else {
       mat = new THREE.MeshBasicMaterial({
         color: 0x888888,
         wireframe: true,
+        transparent: true,
+        depthTest: false,
+        depthWrite: false,
         side: THREE.DoubleSide,
       });
     }
 
-    return new THREE.Mesh(geom, mat);
+    const mesh = new THREE.Mesh(geom, mat);
+    mesh.renderOrder = layerIndex;
+    return mesh;
   }
 
-  private createTextSprite(text: string, fontSize = 24): THREE.Sprite {
+  private createTextSprite(text: string, fontSize = 24, layerIndex: number): THREE.Sprite {
     const canvas = document.createElement('canvas');
-    canvas.width = 512;
-    canvas.height = 128;
+    canvas.width = 1024;
+    canvas.height = 256;
     const ctx = canvas.getContext('2d');
     if (ctx) {
       ctx.font = `Bold ${fontSize * 2}px sans-serif`;
       ctx.fillStyle = '#ffffff';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(text, 256, 64);
+      ctx.fillText(text, 512, 128);
     }
 
     const texture = new THREE.CanvasTexture(canvas);
-    const spriteMat = new THREE.SpriteMaterial({ map: texture, transparent: true });
+    const spriteMat = new THREE.SpriteMaterial({
+      map: texture,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+    });
     const sprite = new THREE.Sprite(spriteMat);
-    sprite.scale.set(40, 10, 1);
+    sprite.scale.set(400, 100, 1);
+    sprite.renderOrder = layerIndex;
     return sprite;
   }
 
@@ -262,19 +337,17 @@ export class VisualizerScene {
       const mesh = this.nodeMeshMap.get(node.id);
       if (!mesh) continue;
 
-      // Update Spectrum Bars heights
       if (node.type === 'Bars') {
         const barsGroup = mesh.children[0] as THREE.Group;
         if (barsGroup && barsGroup.children) {
           barsGroup.children.forEach((barObj, idx) => {
             const freqVal = audioData.spectrum[idx % audioData.spectrum.length] || 0;
-            const barHeight = Math.max(1.0, freqVal * 35.0);
+            const barHeight = Math.max(1.0, freqVal * 250.0);
             barObj.scale.y = barHeight;
           });
         }
       }
 
-      // Apply audio bindings
       for (const binding of node.bindings) {
         let sourceVal = 0;
         if (binding.source === 'Bass') sourceVal = audioData.bass;
@@ -303,7 +376,10 @@ export class VisualizerScene {
   }
 
   public resize(width: number, height: number) {
-    this.camera.aspect = width / height || 16 / 9;
+    this.camera.left = -VIEW_WIDTH / 2;
+    this.camera.right = VIEW_WIDTH / 2;
+    this.camera.top = VIEW_HEIGHT / 2;
+    this.camera.bottom = -VIEW_HEIGHT / 2;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height, false);
     this.render();

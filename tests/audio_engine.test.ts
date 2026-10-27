@@ -1,4 +1,76 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+// Mock Web Audio API & HTMLAudioElement for Node environment
+if (typeof globalThis.Audio === 'undefined') {
+  class MockAudio {
+    crossOrigin = '';
+    src = '';
+    currentTime = 0;
+    duration = 100;
+    paused = true;
+    playbackRate = 1.0;
+    load() {}
+    async play() {
+      this.paused = false;
+    }
+    pause() {
+      this.paused = true;
+    }
+  }
+  (globalThis as any).Audio = MockAudio;
+}
+
+if (typeof globalThis.window === 'undefined') {
+  (globalThis as any).window = globalThis;
+}
+
+if (typeof (globalThis as any).window.AudioContext === 'undefined') {
+  class MockAudioNode {
+    connect() { return this; }
+    setValueAtTime() {}
+  }
+  class MockParam {
+    setValueAtTime() {}
+  }
+  class MockBiquadFilter extends MockAudioNode {
+    gain = new MockParam();
+    frequency = new MockParam();
+  }
+  class MockDelay extends MockAudioNode {
+    delayTime = new MockParam();
+  }
+  class MockGain extends MockAudioNode {
+    gain = new MockParam();
+  }
+  class MockStereoPanner extends MockAudioNode {
+    pan = new MockParam();
+  }
+  class MockAnalyser extends MockAudioNode {
+    fftSize = 128;
+    frequencyBinCount = 64;
+    smoothingTimeConstant = 0.8;
+    getByteFrequencyData(array: Uint8Array) {
+      array.fill(128);
+    }
+  }
+
+  class MockAudioContext {
+    currentTime = 0;
+    state = 'running';
+    destination = new MockAudioNode();
+    createMediaElementSource() { return new MockAudioNode(); }
+    createBiquadFilter() { return new MockBiquadFilter(); }
+    createDelay() { return new MockDelay(); }
+    createGain() { return new MockGain(); }
+    createStereoPanner() { return new MockStereoPanner(); }
+    createAnalyser() { return new MockAnalyser(); }
+    async resume() { this.state = 'running'; }
+    async close() { this.state = 'closed'; }
+  }
+
+  (globalThis as any).window.AudioContext = MockAudioContext;
+}
+
 import { AudioEngine } from '../src/audio/engine';
 
 describe('AudioEngine DSP & Frequency Calculations', () => {
