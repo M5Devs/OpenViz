@@ -1,6 +1,18 @@
-/target
-static/uploads/*
-!static/uploads/.gitkeep
+node_modules/
+dist/
+dist-ssr/
+*.local
+.env
+.env.*
+!.env.example
+
+# Temporary outputs
 *.mp4
 *.ovz
 *.viz
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
