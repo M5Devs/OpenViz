@@ -1,4 +1,5 @@
 import { DSPState, FrequencyData } from '../types';
+import { SpectrumAnalyzer } from './analysis';
 
 export class AudioEngine {
   private ctx: AudioContext | null = null;
@@ -20,7 +21,8 @@ export class AudioEngine {
 
   private lfoAngle = 0;
   private animationFrameId: number | null = null;
-  private fftData: Uint8Array = new Uint8Array(0);
+  private timeDomainBuffer: Float32Array = new Float32Array(4096);
+  private spectrumAnalyzer: SpectrumAnalyzer | null = null;
 
   constructor() {
     this.audioEl = new Audio();
@@ -67,11 +69,15 @@ export class AudioEngine {
       this.stereoPanner = this.ctx.createStereoPanner();
     }
 
-    // Create FFT Analyser Node
+    // Create FFT Analyser Node for time domain samples ONLY
     this.analyser = this.ctx.createAnalyser();
-    this.analyser.fftSize = 128; // 64 frequency bins
-    this.analyser.smoothingTimeConstant = 0.8;
-    this.fftData = new Uint8Array(this.analyser.frequencyBinCount);
+    this.analyser.fftSize = 4096;
+
+    this.spectrumAnalyzer = new SpectrumAnalyzer({
+      sampleRate: this.ctx.sampleRate || 44100,
+      fftSize: 4096,
+      bands: 64,
+    });
 
     // Connect Audio Graph:
     // Source -> BassFilter -> (StereoPanner / Direct) -> Analyser -> Destination
@@ -207,51 +213,21 @@ export class AudioEngine {
   }
 
   public getFrequencyData(): FrequencyData {
-    const binCount = 64;
-    const spectrum = new Float32Array(binCount);
-
-    if (this.analyser && this.fftData.length > 0) {
-      this.analyser.getByteFrequencyData(this.fftData);
-
-      const maxLen = Math.min(binCount, this.fftData.length);
-      for (let i = 0; i < maxLen; i++) {
-        spectrum[i] = this.fftData[i] / 255.0;
-      }
+    if (!this.spectrumAnalyzer) {
+      this.spectrumAnalyzer = new SpectrumAnalyzer({
+        sampleRate: this.ctx?.sampleRate || 44100,
+        fftSize: 4096,
+        bands: 64,
+      });
     }
 
-    // Partition into Bass (0-10), Mid (11-35), High (36-63)
-    let bassSum = 0;
-    let midSum = 0;
-    let highSum = 0;
-    let totalSum = 0;
-
-    for (let i = 0; i < 10; i++) {
-      bassSum += spectrum[i];
-    }
-    for (let i = 10; i < 35; i++) {
-      midSum += spectrum[i];
-    }
-    for (let i = 35; i < 64; i++) {
-      highSum += spectrum[i];
-    }
-    for (let i = 0; i < 64; i++) {
-      totalSum += spectrum[i];
+    if (this.analyser) {
+      this.analyser.getFloatTimeDomainData(this.timeDomainBuffer);
+    } else {
+      this.timeDomainBuffer.fill(0);
     }
 
-    const bass = bassSum / 10;
-    const mid = midSum / 25;
-    const high = highSum / 29;
-    const rms = Math.sqrt(totalSum / 64);
-    const beat = bass > 0.65 ? bass * 1.2 : bass * 0.8;
-
-    return {
-      bass,
-      mid,
-      high,
-      beat,
-      rms,
-      spectrum,
-    };
+    return this.spectrumAnalyzer.analyze(this.timeDomainBuffer);
   }
 
   public dispose() {

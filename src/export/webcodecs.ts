@@ -1,6 +1,33 @@
 import * as Mp4Muxer from 'mp4-muxer';
+import { SpectrumAnalyzer } from '../audio/analysis';
 import { VisualizerScene } from '../render/scene';
 import { ExportOptions, ExportProgress, FrequencyData } from '../types';
+
+/**
+ * Downmixes an AudioBuffer to mono Float32Array.
+ */
+export function downmixAudioBufferToMono(audioBuffer: AudioBuffer): Float32Array {
+  const numChannels = audioBuffer.numberOfChannels;
+  const length = audioBuffer.length;
+  const mono = new Float32Array(length);
+
+  if (numChannels === 1) {
+    mono.set(audioBuffer.getChannelData(0));
+  } else {
+    for (let c = 0; c < numChannels; c++) {
+      const channelData = audioBuffer.getChannelData(c);
+      for (let i = 0; i < length; i++) {
+        mono[i] += channelData[i];
+      }
+    }
+    const invChannels = 1 / numChannels;
+    for (let i = 0; i < length; i++) {
+      mono[i] *= invChannels;
+    }
+  }
+
+  return mono;
+}
 
 export async function exportVideo(
   scene: VisualizerScene,
@@ -50,6 +77,19 @@ export async function exportVideo(
 
   const canvas = scene.renderer.domElement;
 
+  const fftSize = 4096;
+  const sampleRate = audioBuffer ? audioBuffer.sampleRate : 44100;
+
+  const monoPcm = audioBuffer ? downmixAudioBufferToMono(audioBuffer) : null;
+  const analyzer = new SpectrumAnalyzer({
+    sampleRate,
+    fftSize,
+    bands: 64,
+    frameRate: fps,
+  });
+
+  const frameSamples = new Float32Array(fftSize);
+
   for (let frame = 0; frame < totalFrames; frame++) {
     if (encoderError) {
       throw encoderError;
@@ -58,8 +98,24 @@ export async function exportVideo(
     const timeInSeconds = frame / fps;
     const timestampUs = Math.round(timeInSeconds * 1_000_000);
 
-    // Compute audio frequency data at timeInSeconds
-    const freqData = calculateFrequencyDataAtTime(audioBuffer, timeInSeconds);
+    let freqData: FrequencyData;
+
+    if (monoPcm) {
+      const endSample = Math.floor(timeInSeconds * sampleRate);
+      const startSample = endSample - fftSize;
+
+      frameSamples.fill(0);
+      for (let s = 0; s < fftSize; s++) {
+        const pcmIdx = startSample + s;
+        if (pcmIdx >= 0 && pcmIdx < monoPcm.length) {
+          frameSamples[s] = monoPcm[pcmIdx];
+        }
+      }
+      freqData = analyzer.analyze(frameSamples);
+    } else {
+      // Fallback synthetic wave only if audioBuffer is null
+      freqData = getSyntheticFrequencyData(timeInSeconds);
+    }
 
     // Update scene reactivity and render
     scene.updateAudioReactivity(freqData);
@@ -96,43 +152,9 @@ export async function exportVideo(
   return new Blob([buffer], { type: 'video/mp4' });
 }
 
-function calculateFrequencyDataAtTime(audioBuffer: AudioBuffer | null, timeInSeconds: number): FrequencyData {
+function getSyntheticFrequencyData(timeInSeconds: number): FrequencyData {
   const binCount = 64;
   const spectrum = new Float32Array(binCount);
-
-  if (audioBuffer) {
-    const pcmData = audioBuffer.getChannelData(0);
-    const sampleRate = audioBuffer.sampleRate;
-    const startSample = Math.floor(timeInSeconds * sampleRate);
-    const windowSize = 2048;
-
-    let bassSum = 0;
-    let midSum = 0;
-    let highSum = 0;
-    let totalRms = 0;
-
-    for (let i = 0; i < binCount; i++) {
-      const idx = startSample + i * Math.floor(windowSize / binCount);
-      const sample = idx < pcmData.length ? Math.abs(pcmData[idx]) : 0;
-      spectrum[i] = Math.min(1.0, sample * 2.5);
-
-      if (i < 10) bassSum += spectrum[i];
-      else if (i < 35) midSum += spectrum[i];
-      else highSum += spectrum[i];
-
-      totalRms += sample * sample;
-    }
-
-    const bass = Math.min(1.0, (bassSum / 10) * 1.5);
-    const mid = Math.min(1.0, midSum / 25);
-    const high = Math.min(1.0, highSum / 29);
-    const rms = Math.min(1.0, Math.sqrt(totalRms / binCount));
-    const beat = bass > 0.6 ? bass * 1.3 : bass * 0.7;
-
-    return { bass, mid, high, beat, rms, spectrum };
-  }
-
-  // Fallback synthetic wave if audioBuffer is not provided
   for (let i = 0; i < binCount; i++) {
     spectrum[i] = Math.abs(Math.sin(timeInSeconds * 4 + i * 0.1)) * 0.8;
   }
