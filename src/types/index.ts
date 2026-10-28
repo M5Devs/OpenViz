@@ -47,6 +47,7 @@ export interface ImageNodeData {
 export interface TextNodeData {
   text: string;
   size: number;
+  color?: string;
 }
 
 export interface GroupNodeData {
