@@ -14,10 +14,16 @@ export interface AudioBinding {
   outputRange: [number, number];
 }
 
+/**
+ * Node transform settings.
+ * For Image nodes, transform.scale is a MULTIPLIER of the image's base display size.
+ * Base display size: natural texture size fitted ('contain') into a 360x360 box.
+ * If imageData.fit === 'cover', base size = natural size covering the logical canvas (1080 height x aspect width).
+ */
 export interface NodeTransform {
   position: [number, number];
   scale: [number, number];
-  rotation: number; // radians or degrees
+  rotation: number; // radians or degrees in UI
   opacity: number;
 }
 
@@ -35,6 +41,7 @@ export interface BarsNodeData {
 export interface ImageNodeData {
   assetId: string;
   url?: string;
+  fit?: 'contain' | 'cover';
 }
 
 export interface TextNodeData {
