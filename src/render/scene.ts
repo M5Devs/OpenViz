@@ -291,7 +291,7 @@ export class VisualizerScene {
       animGroup.add(imageMesh);
       materials.push(imageMesh.material as THREE.Material);
     } else if (node.type === 'Text' && node.textData) {
-      const textSprite = this.createTextSprite(node.textData.text, node.textData.size, renderOrder);
+      const textSprite = this.createTextSprite(node.textData.text, node.textData.size, renderOrder, node.textData.color);
       animGroup.add(textSprite);
       materials.push(textSprite.material);
     } else {
@@ -483,7 +483,7 @@ export class VisualizerScene {
     return mesh;
   }
 
-  private createTextSprite(text: string, fontSize = 24, renderOrder: number): THREE.Sprite {
+  private createTextSprite(text: string, fontSize = 24, renderOrder: number, color?: string): THREE.Sprite {
     if (typeof document === 'undefined') {
       const spriteMat = new THREE.SpriteMaterial({
         transparent: true,
@@ -514,7 +514,7 @@ export class VisualizerScene {
       canvas.height = canvasH;
 
       ctx.font = `Bold ${fontSize}px ${FONT_STACK}`;
-      ctx.fillStyle = '#ffffff';
+      ctx.fillStyle = color || '#ffffff';
       ctx.direction = dir;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';

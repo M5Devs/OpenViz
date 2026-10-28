@@ -1,3 +1,4 @@
+import JSZip from 'jszip';
 import { computeExportSize } from '../export/avc';
 import { parseAspect } from '../render/scene';
 import { createOutputTarget, getMemoryGuardThresholdBytes, OutputTarget } from '../export/target';
@@ -137,8 +138,12 @@ export class StudioController {
         try {
           this.assetRegistry.revokeAll();
           const buffer = await file.arrayBuffer();
-          if (file.name.endsWith('.viz')) {
+          const filename = file.name.toLowerCase();
+
+          if (filename.endsWith('.viz')) {
             this.template = await importAveeViz(buffer, { registry: this.assetRegistry });
+          } else if (filename.endsWith('.ovz')) {
+            this.template = await this.loadOvzBuffer(buffer);
           } else {
             const text = new TextDecoder().decode(buffer);
             this.template = JSON.parse(text);
@@ -152,6 +157,18 @@ export class StudioController {
         }
       });
     }
+    // Save .ovz Project Bundle
+    const saveOvzBtn = document.getElementById('saveOvzBtn');
+    if (saveOvzBtn) {
+      saveOvzBtn.addEventListener('click', async () => {
+        try {
+          await this.saveTemplateAsOvz();
+        } catch (err) {
+          this.showStatus(`Failed to save .ovz project: ${(err as Error).message}`, true);
+        }
+      });
+    }
+
 
     // Audio Input
     const audioInput = document.getElementById('audioInput') as HTMLInputElement;
@@ -532,32 +549,133 @@ export class StudioController {
     if (!layersList) return;
 
     const items: HTMLElement[] = [];
-    for (const node of this.template.nodes) {
+    const nodes = this.template.nodes;
+
+    for (let index = 0; index < nodes.length; index++) {
+      const node = nodes[index];
       const isSelected = node.id === this.selectedNodeId;
+      const isVisible = node.transform.opacity > 0;
+
+      const titleSpan = el('span', { className: 'truncate font-medium flex-1 mr-2' }, `${node.name} (${node.type})`);
+
+      const visBtn = el('button', {
+        className: `p-1 hover:bg-white/20 rounded ${isVisible ? 'text-indigo-300' : 'text-slate-500'}`,
+        title: isVisible ? 'Hide Layer' : 'Show Layer',
+        onclick: (e: MouseEvent) => {
+          e.stopPropagation();
+          if (isVisible) {
+            (node as any)._lastOpacity = node.transform.opacity;
+            node.transform.opacity = 0;
+          } else {
+            node.transform.opacity = (node as any)._lastOpacity && (node as any)._lastOpacity > 0 ? (node as any)._lastOpacity : 1;
+          }
+          this.scene.updateNode(node.id);
+          this.renderLayersList();
+          this.renderInspector();
+        }
+      }, isVisible ? '👁️' : '🙈');
+
+      const dupBtn = el('button', {
+        className: 'p-1 hover:bg-white/20 rounded text-slate-300',
+        title: 'Duplicate Layer',
+        onclick: (e: MouseEvent) => {
+          e.stopPropagation();
+          this.duplicateNode(node.id);
+        }
+      }, '📄');
+
+      const upBtn = el('button', {
+        className: `p-1 hover:bg-white/20 rounded ${index === 0 ? 'opacity-30 cursor-not-allowed' : 'text-slate-300'}`,
+        title: 'Move Up',
+        onclick: (e: MouseEvent) => {
+          e.stopPropagation();
+          if (index > 0) {
+            this.reorderNode(index, index - 1);
+          }
+        }
+      }, '🔼');
+
+      const downBtn = el('button', {
+        className: `p-1 hover:bg-white/20 rounded ${index === nodes.length - 1 ? 'opacity-30 cursor-not-allowed' : 'text-slate-300'}`,
+        title: 'Move Down',
+        onclick: (e: MouseEvent) => {
+          e.stopPropagation();
+          if (index < nodes.length - 1) {
+            this.reorderNode(index, index + 1);
+          }
+        }
+      }, '🔽');
+
+      const delBtn = el('button', {
+        className: 'p-1 hover:bg-rose-500/30 rounded text-rose-400',
+        title: 'Delete Layer',
+        onclick: (e: MouseEvent) => {
+          e.stopPropagation();
+          this.deleteNode(node.id);
+        }
+      }, '🗑️');
+
+      const actionsDiv = el('div', { className: 'flex items-center gap-0.5 text-[10px]' }, visBtn, dupBtn, upBtn, downBtn, delBtn);
+
       const item = el(
         'div',
         {
-          className: `p-2 rounded text-xs cursor-pointer flex items-center justify-between border transition ${
+          className: `p-1.5 px-2 rounded text-xs cursor-pointer flex items-center justify-between border transition ${
             isSelected
               ? 'bg-indigo-600/30 border-indigo-500/50 text-indigo-200'
               : 'bg-white/5 border-white/5 text-slate-300 hover:bg-white/10'
           }`,
           onclick: () => this.scene.selectNode(node.id),
         },
-        `${node.name} (${node.type})`
+        titleSpan,
+        actionsDiv
       );
       items.push(item);
     }
     layersList.replaceChildren(...items);
   }
 
-  private renderInspector() {
+  private deleteNode(nodeId: string) {
+    this.scene.removeNode(nodeId);
+    this.renderLayersList();
+    this.renderInspector();
+  }
+
+  private duplicateNode(nodeId: string) {
+    const original = this.template.nodes.find((n) => n.id === nodeId);
+    if (!original) return;
+
+    const cloned: OpenVizNode = JSON.parse(JSON.stringify(original));
+    cloned.id = `${original.type.toLowerCase()}_${Date.now()}`;
+    cloned.name = `${original.name} Copy`;
+    cloned.transform.position = [original.transform.position[0] + 20, original.transform.position[1] - 20];
+
+    this.scene.addNode(cloned);
+    this.scene.selectNode(cloned.id);
+    this.renderLayersList();
+    this.renderInspector();
+  }
+
+  private reorderNode(fromIdx: number, toIdx: number) {
+    if (fromIdx < 0 || fromIdx >= this.template.nodes.length || toIdx < 0 || toIdx >= this.template.nodes.length) return;
+    const [moved] = this.template.nodes.splice(fromIdx, 1);
+    this.template.nodes.splice(toIdx, 0, moved);
+    this.scene.loadTemplate(this.template);
+    if (this.selectedNodeId) {
+      this.scene.selectNode(this.selectedNodeId);
+    }
+    this.renderLayersList();
+  }
+
+    private renderInspector() {
     const inspectorContent = document.getElementById('inspectorContent');
     if (!inspectorContent) return;
 
     if (!this.selectedNodeId) {
+      const postEffectsPanel = this.renderPostEffectsPanel();
       inspectorContent.replaceChildren(
-        el('p', null, 'Select a layer to edit properties.')
+        el('p', { className: 'text-slate-400 mb-4' }, 'Select a layer from the left panel or canvas to edit properties.'),
+        postEffectsPanel
       );
       return;
     }
@@ -565,7 +683,7 @@ export class StudioController {
     const node = this.template.nodes.find((n) => n.id === this.selectedNodeId);
     if (!node) {
       inspectorContent.replaceChildren(
-        el('p', null, 'Layer not found.')
+        el('p', { className: 'text-slate-400' }, 'Layer not found.')
       );
       return;
     }
@@ -643,6 +761,7 @@ export class StudioController {
     });
 
     // Opacity (0..1 slider)
+    const opacityValDisplay = el('span', { className: 'text-indigo-400 font-mono text-[11px]' }, `${Math.round(node.transform.opacity * 100)}%`);
     const opacityInput = el('input', {
       type: 'range',
       min: '0',
@@ -652,7 +771,9 @@ export class StudioController {
       value: node.transform.opacity,
       className: 'w-full accent-indigo-500 cursor-pointer h-1 bg-slate-700 rounded appearance-none mt-1',
       oninput: (e: Event) => {
-        node.transform.opacity = parseFloat((e.target as HTMLInputElement).value) || 0;
+        const val = parseFloat((e.target as HTMLInputElement).value) || 0;
+        node.transform.opacity = val;
+        opacityValDisplay.textContent = `${Math.round(val * 100)}%`;
         this.scene.updateNode(node.id);
       },
     });
@@ -675,87 +796,358 @@ export class StudioController {
         'div',
         { className: 'grid grid-cols-2 gap-2' },
         el('div', null, el('label', { className: 'block text-slate-400 mb-1' }, 'Rotation (deg)'), rotationInput),
-        el('div', null, el('label', { className: 'block text-slate-400 mb-1' }, 'Opacity'), opacityInput)
+        el('div', null,
+          el('div', { className: 'flex justify-between items-center mb-1' },
+            el('label', { className: 'text-slate-400' }, 'Opacity'),
+            opacityValDisplay
+          ),
+          opacityInput
+        )
       ),
     ];
 
-    if (node.type === 'Text' && node.textData) {
-      const textValInput = el('input', {
-        type: 'text',
-        id: 'textValInput',
-        value: node.textData.text,
-        className: 'w-full glass-input p-1.5 rounded text-xs',
-        oninput: (e: Event) => {
-          if (node.textData) {
-            node.textData.text = (e.target as HTMLInputElement).value;
-            this.scene.updateNode(node.id);
+    // Image Node Controls
+    if (node.type === 'Image' && node.imageData) {
+      const imageData = node.imageData;
+      const fitSelect = el('select', {
+        className: 'w-full glass-input p-1.5 rounded text-xs bg-slate-800 text-slate-200 border border-white/10 cursor-pointer',
+        onchange: (e: Event) => {
+          imageData.fit = (e.target as HTMLSelectElement).value as 'contain' | 'cover';
+          this.scene.updateNode(node.id);
+        }
+      },
+        el('option', { value: 'contain', selected: imageData.fit !== 'cover' }, 'Contain'),
+        el('option', { value: 'cover', selected: imageData.fit === 'cover' }, 'Cover (Wallpaper Mode)')
+      );
+
+      const replaceImgFileInput = el('input', {
+        type: 'file',
+        accept: 'image/*',
+        className: 'hidden',
+        onchange: (e: Event) => {
+          const file = (e.target as HTMLInputElement).files?.[0];
+          if (!file) return;
+          const url = this.assetRegistry.create(file);
+          if (!isValidAssetUrl(url)) {
+            this.showStatus('Invalid asset URL', true);
+            return;
           }
-        },
+          imageData.url = url;
+          imageData.assetId = `asset_${Date.now()}`;
+          this.scene.updateNode(node.id);
+          this.showStatus('Image replaced.');
+        }
       });
 
-      const fontSizeInput = el('input', {
-        type: 'number',
-        id: 'fontSizeInput',
-        value: node.textData.size,
-        className: 'w-full glass-input p-1.5 rounded text-xs',
-        oninput: (e: Event) => {
-          if (node.textData) {
-            node.textData.size = parseInt((e.target as HTMLInputElement).value, 10) || 24;
-            this.scene.updateNode(node.id);
-          }
-        },
-      });
+      const replaceImgBtn = el('button', {
+        className: 'w-full py-1.5 px-3 bg-indigo-600/30 hover:bg-indigo-600/50 border border-indigo-500/40 text-indigo-200 font-medium rounded transition flex items-center justify-center gap-1.5',
+        onclick: () => replaceImgFileInput.click()
+      }, '🖼️ Replace Image', replaceImgFileInput);
 
       childrenList.push(
-        el('div', { className: 'border-t border-white/10 pt-2 space-y-2' },
-          el('div', null, el('label', { className: 'block text-slate-400 mb-1' }, 'Text Content'), textValInput),
-          el('div', null, el('label', { className: 'block text-slate-400 mb-1' }, 'Font Size'), fontSizeInput)
+        el('div', { className: 'border-t border-white/10 pt-3 space-y-3' },
+          el('h3', { className: 'font-semibold text-slate-300 uppercase text-[10px] tracking-wider' }, 'Image Properties'),
+          el('div', null, el('label', { className: 'block text-slate-400 mb-1' }, 'Fit Mode'), fitSelect),
+          replaceImgBtn
         )
       );
     }
 
+    // Spectrum Bars Node Controls
     if (node.type === 'Bars' && node.barsData) {
+      const barsData = node.barsData;
+
+      const radialToggle = el('input', {
+        type: 'checkbox',
+        checked: barsData.isRadial ?? true,
+        className: 'accent-indigo-500 w-4 h-4 cursor-pointer',
+        onchange: (e: Event) => {
+          barsData.isRadial = (e.target as HTMLInputElement).checked;
+          this.scene.updateNode(node.id);
+          this.renderInspector();
+        }
+      });
+
+      const radiusValDisplay = el('span', { className: 'text-indigo-400 font-mono text-[11px]' }, `${barsData.innerRadius ?? 240}px`);
+      const radiusSlider = el('input', {
+        type: 'range',
+        min: '50',
+        max: '600',
+        step: '5',
+        value: barsData.innerRadius ?? 240,
+        className: 'w-full accent-indigo-500 cursor-pointer h-1 bg-slate-700 rounded appearance-none',
+        oninput: (e: Event) => {
+          const val = parseInt((e.target as HTMLInputElement).value, 10) || 240;
+          barsData.innerRadius = val;
+          radiusValDisplay.textContent = `${val}px`;
+          this.scene.updateNode(node.id);
+        }
+      });
+
+      const barWidthValDisplay = el('span', { className: 'text-indigo-400 font-mono text-[11px]' }, `${barsData.width ?? 4}px`);
+      const barWidthSlider = el('input', {
+        type: 'range',
+        min: '1',
+        max: '20',
+        step: '1',
+        value: barsData.width ?? 4,
+        className: 'w-full accent-indigo-500 cursor-pointer h-1 bg-slate-700 rounded appearance-none',
+        oninput: (e: Event) => {
+          const val = parseInt((e.target as HTMLInputElement).value, 10) || 4;
+          barsData.width = val;
+          barWidthValDisplay.textContent = `${val}px`;
+          this.scene.updateNode(node.id);
+        }
+      });
+
+      const barCountValDisplay = el('span', { className: 'text-indigo-400 font-mono text-[11px]' }, `${barsData.count ?? 64}`);
+      const barCountSlider = el('input', {
+        type: 'range',
+        min: '16',
+        max: '256',
+        step: '4',
+        value: barsData.count ?? 64,
+        className: 'w-full accent-indigo-500 cursor-pointer h-1 bg-slate-700 rounded appearance-none',
+        oninput: (e: Event) => {
+          const val = parseInt((e.target as HTMLInputElement).value, 10) || 64;
+          barsData.count = val;
+          barCountValDisplay.textContent = `${val}`;
+          this.scene.updateNode(node.id);
+        }
+      });
+
       const colorStartInput = el('input', {
         type: 'color',
         id: 'colorStartInput',
-        value: rgbaToHex(node.barsData.colorStart),
+        value: rgbaToHex(barsData.colorStart),
         className: 'w-full h-8 bg-transparent cursor-pointer rounded border border-white/10 p-0.5',
         oninput: (e: Event) => {
-          if (node.barsData) {
-            const hex = (e.target as HTMLInputElement).value;
-            node.barsData.colorStart = hexToRgba(hex, node.barsData.colorStart[3]);
-            this.scene.updateNode(node.id);
-          }
+          const hex = (e.target as HTMLInputElement).value;
+          barsData.colorStart = hexToRgba(hex, barsData.colorStart[3]);
+          this.scene.updateNode(node.id);
         },
       });
 
       const colorEndInput = el('input', {
         type: 'color',
         id: 'colorEndInput',
-        value: rgbaToHex(node.barsData.colorEnd),
+        value: rgbaToHex(barsData.colorEnd),
         className: 'w-full h-8 bg-transparent cursor-pointer rounded border border-white/10 p-0.5',
         oninput: (e: Event) => {
-          if (node.barsData) {
-            const hex = (e.target as HTMLInputElement).value;
-            node.barsData.colorEnd = hexToRgba(hex, node.barsData.colorEnd[3]);
-            this.scene.updateNode(node.id);
-          }
+          const hex = (e.target as HTMLInputElement).value;
+          barsData.colorEnd = hexToRgba(hex, barsData.colorEnd[3]);
+          this.scene.updateNode(node.id);
         },
       });
 
-      childrenList.push(
-        el('div', { className: 'border-t border-white/10 pt-2 grid grid-cols-2 gap-2' },
+      const barsControls = [
+        el('h3', { className: 'font-semibold text-slate-300 uppercase text-[10px] tracking-wider' }, 'Spectrum Bars Properties'),
+        el('div', { className: 'flex items-center justify-between bg-white/5 p-2 rounded' },
+          el('span', { className: 'text-slate-300 font-medium' }, 'Radial Circle Mode'),
+          radialToggle
+        ),
+      ];
+
+      if (barsData.isRadial) {
+        barsControls.push(
+          el('div', null,
+            el('div', { className: 'flex justify-between items-center mb-1' },
+              el('label', { className: 'text-slate-400' }, 'Inner Radius'),
+              radiusValDisplay
+            ),
+            radiusSlider
+          )
+        );
+      }
+
+      barsControls.push(
+        el('div', null,
+          el('div', { className: 'flex justify-between items-center mb-1' },
+            el('label', { className: 'text-slate-400' }, 'Bar Width'),
+            barWidthValDisplay
+          ),
+          barWidthSlider
+        ),
+        el('div', null,
+          el('div', { className: 'flex justify-between items-center mb-1' },
+            el('label', { className: 'text-slate-400' }, 'Bar Count'),
+            barCountValDisplay
+          ),
+          barCountSlider
+        ),
+        el('div', { className: 'grid grid-cols-2 gap-2 pt-1' },
           el('div', null, el('label', { className: 'block text-slate-400 mb-1' }, 'Color Start'), colorStartInput),
           el('div', null, el('label', { className: 'block text-slate-400 mb-1' }, 'Color End'), colorEndInput)
         )
       );
+
+      childrenList.push(el('div', { className: 'border-t border-white/10 pt-3 space-y-3' }, ...barsControls));
     }
 
-    const content = el('div', { className: 'space-y-3' }, ...childrenList);
+    // Text Node Controls
+    if (node.type === 'Text' && node.textData) {
+      const textData = node.textData;
+
+      const textValInput = el('textarea', {
+        id: 'textValInput',
+        rows: '2',
+        value: textData.text,
+        className: 'w-full glass-input p-1.5 rounded text-xs resize-none',
+        oninput: (e: Event) => {
+          textData.text = (e.target as HTMLTextAreaElement).value;
+          this.scene.updateNode(node.id);
+        },
+      });
+
+      const fontSizeValDisplay = el('span', { className: 'text-indigo-400 font-mono text-[11px]' }, `${textData.size}px`);
+      const fontSizeSlider = el('input', {
+        type: 'range',
+        min: '10',
+        max: '120',
+        step: '1',
+        value: textData.size,
+        className: 'w-full accent-indigo-500 cursor-pointer h-1 bg-slate-700 rounded appearance-none',
+        oninput: (e: Event) => {
+          const val = parseInt((e.target as HTMLInputElement).value, 10) || 24;
+          textData.size = val;
+          fontSizeValDisplay.textContent = `${val}px`;
+          this.scene.updateNode(node.id);
+        },
+      });
+
+      const textColorPicker = el('input', {
+        type: 'color',
+        value: textData.color || '#ffffff',
+        className: 'w-full h-8 bg-transparent cursor-pointer rounded border border-white/10 p-0.5',
+        oninput: (e: Event) => {
+          textData.color = (e.target as HTMLInputElement).value;
+          this.scene.updateNode(node.id);
+        }
+      });
+
+      childrenList.push(
+        el('div', { className: 'border-t border-white/10 pt-3 space-y-3' },
+          el('h3', { className: 'font-semibold text-slate-300 uppercase text-[10px] tracking-wider' }, 'Text Properties'),
+          el('div', null, el('label', { className: 'block text-slate-400 mb-1' }, 'Text Content'), textValInput),
+          el('div', null,
+            el('div', { className: 'flex justify-between items-center mb-1' },
+              el('label', { className: 'text-slate-400' }, 'Font Size'),
+              fontSizeValDisplay
+            ),
+            fontSizeSlider
+          ),
+          el('div', null, el('label', { className: 'block text-slate-400 mb-1' }, 'Text Color'), textColorPicker)
+        )
+      );
+    }
+
+    // Prominent Red Delete Layer Button
+    const deleteLayerBtn = el('button', {
+      className: 'w-full py-2 px-3 bg-rose-600/80 hover:bg-rose-600 text-white font-semibold rounded-lg shadow-lg transition flex items-center justify-center gap-1.5 mt-4',
+      onclick: () => this.deleteNode(node.id)
+    }, '🗑️ Delete Layer');
+
+    const postEffectsPanel = this.renderPostEffectsPanel();
+
+    const content = el('div', { className: 'space-y-4' }, ...childrenList, deleteLayerBtn, el('div', { className: 'border-t border-white/10 pt-4' }, postEffectsPanel));
     inspectorContent.replaceChildren(content);
   }
 
-  private startRenderLoop() {
+  private renderPostEffectsPanel(): HTMLElement {
+    if (!this.template.postEffects) {
+      this.template.postEffects = [];
+    }
+
+    let bloom = this.template.postEffects.find((p) => p.type === 'Bloom');
+    if (!bloom) {
+      bloom = { type: 'Bloom', threshold: 0.5, intensity: 1.0 };
+      this.template.postEffects.push(bloom);
+    }
+
+    let ca = this.template.postEffects.find((p) => p.type === 'ChromaticAberration');
+    if (!ca) {
+      ca = { type: 'ChromaticAberration', amount: 0.02 };
+      this.template.postEffects.push(ca);
+    }
+
+    const bloomThreshDisplay = el('span', { className: 'text-indigo-400 font-mono text-[11px]' }, `${bloom.threshold ?? 0.5}`);
+    const bloomThreshSlider = el('input', {
+      type: 'range',
+      min: '0',
+      max: '1',
+      step: '0.05',
+      value: bloom.threshold ?? 0.5,
+      className: 'w-full accent-indigo-500 cursor-pointer h-1 bg-slate-700 rounded appearance-none',
+      oninput: (e: Event) => {
+        const val = parseFloat((e.target as HTMLInputElement).value) || 0;
+        bloom!.threshold = val;
+        bloomThreshDisplay.textContent = `${val}`;
+      }
+    });
+
+    const bloomIntDisplay = el('span', { className: 'text-indigo-400 font-mono text-[11px]' }, `${bloom.intensity ?? 1.0}`);
+    const bloomIntSlider = el('input', {
+      type: 'range',
+      min: '0',
+      max: '3',
+      step: '0.1',
+      value: bloom.intensity ?? 1.0,
+      className: 'w-full accent-indigo-500 cursor-pointer h-1 bg-slate-700 rounded appearance-none',
+      oninput: (e: Event) => {
+        const val = parseFloat((e.target as HTMLInputElement).value) || 0;
+        bloom!.intensity = val;
+        bloomIntDisplay.textContent = `${val}`;
+      }
+    });
+
+    const caAmtDisplay = el('span', { className: 'text-indigo-400 font-mono text-[11px]' }, `${ca.amount ?? 0.02}`);
+    const caAmtSlider = el('input', {
+      type: 'range',
+      min: '0',
+      max: '0.1',
+      step: '0.005',
+      value: ca.amount ?? 0.02,
+      className: 'w-full accent-indigo-500 cursor-pointer h-1 bg-slate-700 rounded appearance-none',
+      oninput: (e: Event) => {
+        const val = parseFloat((e.target as HTMLInputElement).value) || 0;
+        ca!.amount = val;
+        caAmtDisplay.textContent = `${val}`;
+      }
+    });
+
+    return el('div', { className: 'space-y-3' },
+      el('h3', { className: 'font-semibold text-slate-300 uppercase text-[10px] tracking-wider' }, 'Global Post-Effects'),
+      el('div', { className: 'bg-white/5 p-2.5 rounded-lg border border-white/5 space-y-2' },
+        el('span', { className: 'text-xs font-semibold text-slate-200 block' }, 'Bloom'),
+        el('div', null,
+          el('div', { className: 'flex justify-between items-center mb-1 text-[11px]' },
+            el('label', { className: 'text-slate-400' }, 'Threshold'),
+            bloomThreshDisplay
+          ),
+          bloomThreshSlider
+        ),
+        el('div', null,
+          el('div', { className: 'flex justify-between items-center mb-1 text-[11px]' },
+            el('label', { className: 'text-slate-400' }, 'Intensity'),
+            bloomIntDisplay
+          ),
+          bloomIntSlider
+        )
+      ),
+      el('div', { className: 'bg-white/5 p-2.5 rounded-lg border border-white/5 space-y-2' },
+        el('span', { className: 'text-xs font-semibold text-slate-200 block' }, 'Chromatic Aberration'),
+        el('div', null,
+          el('div', { className: 'flex justify-between items-center mb-1 text-[11px]' },
+            el('label', { className: 'text-slate-400' }, 'Amount'),
+            caAmtDisplay
+          ),
+          caAmtSlider
+        )
+      )
+    );
+  }
+
+private startRenderLoop() {
     const loop = () => {
       const audioData = this.audioEngine.getFrequencyData();
       const timeSeconds = this.audioEngine.getCurrentTime();
@@ -784,6 +1176,105 @@ export class StudioController {
     };
 
     this.animationFrameId = requestAnimationFrame(loop);
+  }
+
+
+  public async saveTemplateAsOvz(): Promise<Blob> {
+    const zip = new JSZip();
+
+    // Create a clean copy of the template JSON to store
+    const templateCopy: OpenVizTemplate = JSON.parse(JSON.stringify(this.template));
+
+    // Ensure assets dictionary exists
+    if (!templateCopy.assets) {
+      templateCopy.assets = {};
+    }
+
+    const assetsFolder = zip.folder('assets');
+
+    for (const node of templateCopy.nodes) {
+      if (node.type === 'Image' && node.imageData) {
+        const url = node.imageData.url;
+        if (url) {
+          try {
+            let blob: Blob;
+            if (url.startsWith('data:')) {
+              const res = await fetch(url);
+              blob = await res.blob();
+            } else if (url.startsWith('blob:')) {
+              const res = await fetch(url);
+              blob = await res.blob();
+            } else {
+              const res = await fetch(url);
+              blob = await res.blob();
+            }
+
+            const assetId = node.imageData.assetId || `asset_${Date.now()}`;
+            const ext = blob.type.split('/')[1] || 'png';
+            const fileName = `${assetId}.${ext}`;
+
+            if (assetsFolder) {
+              assetsFolder.file(fileName, blob);
+            }
+
+            templateCopy.assets[assetId] = `assets/${fileName}`;
+            node.imageData.assetId = assetId;
+            node.imageData.url = `assets/${fileName}`;
+          } catch (err) {
+            console.warn(`Could not bundle image asset for node ${node.id}:`, err);
+          }
+        }
+      }
+    }
+
+    zip.file('scene.json', JSON.stringify(templateCopy, null, 2));
+
+    const ovzBlob = await zip.generateAsync({ type: 'blob', mimeType: 'application/octet-stream' });
+
+    if (typeof document !== 'undefined') {
+      const downloadUrl = URL.createObjectURL(ovzBlob);
+      const a = document.createElement('a');
+      a.href = downloadUrl;
+      a.download = `${templateCopy.name || 'project'}.ovz`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(downloadUrl), 10_000);
+      this.showStatus('Project saved as .ovz bundle!');
+    }
+
+    return ovzBlob;
+  }
+
+  public async loadOvzBuffer(buffer: ArrayBuffer): Promise<OpenVizTemplate> {
+    const zip = await JSZip.loadAsync(buffer);
+    const sceneJsonFile = zip.file('scene.json');
+    if (!sceneJsonFile) {
+      throw new Error('Invalid .ovz project: missing scene.json');
+    }
+
+    const sceneJsonText = await sceneJsonFile.async('string');
+    const parsedTemplate: OpenVizTemplate = JSON.parse(sceneJsonText);
+
+    const assetUrls: Record<string, string> = {};
+
+    for (const node of parsedTemplate.nodes) {
+      if (node.type === 'Image' && node.imageData) {
+        const path = node.imageData.url || (node.imageData.assetId ? `assets/${node.imageData.assetId}` : '');
+        if (path) {
+          const zipFile = zip.file(path) || zip.file(path.replace(/^assets\//, ''));
+          if (zipFile) {
+            const blob = await zipFile.async('blob');
+            const url = this.assetRegistry.create(blob);
+            node.imageData.url = url;
+            if (node.imageData.assetId) {
+              assetUrls[node.imageData.assetId] = url;
+            }
+          }
+        }
+      }
+    }
+
+    parsedTemplate.assets = assetUrls;
+    return parsedTemplate;
   }
 
   public dispose() {
