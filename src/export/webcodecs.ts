@@ -1,3 +1,5 @@
+import { OutputTarget, createOutputTarget } from './target';
+import { yieldToEventLoop, estimateVideoBitrate } from './defaults';
 import * as Mp4Muxer from 'mp4-muxer';
 import { SpectrumAnalyzer } from '../audio/analysis';
 import { parseAspect, VisualizerScene } from '../render/scene';
@@ -11,6 +13,9 @@ export interface WebCodecsExportOptions {
   bitrate?: number;
   videoBitrate?: number;
   audioBitrate?: number;
+  quality?: 'low' | 'medium' | 'high';
+  target?: OutputTarget;
+  onVisibilityWarning?: (message: string) => void;
 }
 
 export interface WebCodecsExportProgress {
@@ -28,10 +33,12 @@ export interface ExportResultInfo {
   audioCodec: 'aac' | 'opus' | null;
   hardwareAccelerated: boolean | null;
   estimatedBytes: number;
+  output: 'disk' | 'memory';
+  hiddenDuringExport: boolean;
 }
 
 export interface ExportResult {
-  blob: Blob;
+  blob: Blob | null;
   info: ExportResultInfo;
 }
 
@@ -210,14 +217,38 @@ export async function exportVideo(
     }
   }
 
-  const muxerOptions: Mp4Muxer.MuxerOptions<Mp4Muxer.ArrayBufferTarget> = {
-    target: new Mp4Muxer.ArrayBufferTarget(),
+  const target =
+    options?.target ??
+    (await createOutputTarget({
+      suggestedName: 'openviz_render.mp4',
+      estimatedBytes,
+    }));
+
+  let hiddenDuringExport = false;
+  const handleVisibilityChange = () => {
+    if (typeof document !== 'undefined' && document.hidden) {
+      hiddenDuringExport = true;
+      if (options?.onVisibilityWarning) {
+        options.onVisibilityWarning('Keep this tab visible; export may slow down or stall');
+      }
+    }
+  };
+
+  if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+    if (document.hidden) {
+      hiddenDuringExport = true;
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+  }
+
+  const muxerOptions: Mp4Muxer.MuxerOptions<any> = {
+    target: target.muxerTarget,
     video: {
       codec: 'avc',
       width,
       height,
     },
-    fastStart: 'in-memory',
+    fastStart: target.kind === 'disk' ? false : 'in-memory',
     firstTimestampBehavior: 'strict',
   };
 
@@ -394,7 +425,7 @@ export async function exportVideo(
       }
 
       if (frame % 10 === 0) {
-        await new Promise((resolve) => setTimeout(resolve, 0));
+        await yieldToEventLoop();
       }
     }
 
@@ -425,8 +456,8 @@ export async function exportVideo(
     }
 
     muxer.finalize();
+    const blob = await target.finalize();
 
-    const blob = new Blob([muxer.target.buffer], { type: 'video/mp4' });
     return {
       blob,
       info: {
@@ -437,9 +468,17 @@ export async function exportVideo(
         audioCodec,
         hardwareAccelerated,
         estimatedBytes,
+        output: target.kind,
+        hiddenDuringExport,
       },
     };
+  } catch (err) {
+    await target.abort();
+    throw err;
   } finally {
+    if (typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    }
     if (videoEncoder && videoEncoder.state !== 'closed') {
       videoEncoder.close();
     }
