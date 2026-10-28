@@ -1,26 +1,25 @@
-import { AudioEngine } from '../audio/engine';
-import { VisualizerScene } from '../render/scene';
 import { importAveeViz } from '../importer/avee';
+import { AudioEngine } from '../audio/engine';
 import { exportVideo } from '../export/webcodecs';
-import { OpenVizTemplate, OpenVizNode } from '../types';
+import { VisualizerScene } from '../render/scene';
+import { OpenVizNode, OpenVizTemplate } from '../types';
 
 export class StudioController {
-  private audioEngine: AudioEngine;
+  private container: HTMLElement;
   private scene: VisualizerScene;
+  private audioEngine: AudioEngine;
   private template: OpenVizTemplate;
   private selectedNodeId: string | null = null;
   private animationFrameId: number | null = null;
   private audioBuffer: AudioBuffer | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
+    this.container = canvas.parentElement || canvas;
+
+    this.template = this.getDefaultTemplate();
+
+    this.scene = new VisualizerScene(this.container);
     this.audioEngine = new AudioEngine();
-    this.scene = new VisualizerScene(canvas);
-
-    this.template = this.createDefaultTemplate();
-    this.scene.loadTemplate(this.template);
-
-    this.setupUIEvents();
-    this.setupResizeObserver(canvas);
 
     this.scene.setOnSelectCallback((nodeId) => {
       this.selectedNodeId = nodeId;
@@ -28,49 +27,65 @@ export class StudioController {
       this.renderInspector();
     });
 
+    this.setupUIEvents();
+    this.setupResizeObserver(canvas);
+
+    this.scene.loadTemplate(this.template);
     this.startRenderLoop();
   }
 
-  private createDefaultTemplate(): OpenVizTemplate {
+  private getDefaultTemplate(): OpenVizTemplate {
     return {
-      schemaVersion: 'openviz/1',
-      name: 'Default Spectrum Visualizer',
-      author: 'OpenViz Studio',
+      schemaVersion: '1.0',
+      name: 'Default Cyberpunk Template',
+      author: 'OpenViz',
       canvasAspect: '16:9',
-      clearColor: [0.05, 0.05, 0.08, 1.0],
+      clearColor: [0.05, 0.05, 0.08, 1],
+      postEffects: [],
       nodes: [
         {
-          id: 'radial_spectrum',
+          id: 'bg_1',
+          name: 'Background Art',
+          type: 'Image',
+          transform: { position: [0, 0], scale: [1, 1], rotation: 0, opacity: 1 },
+          bindings: [{ source: 'Bass', target: 'ScaleUniform', outputRange: [1.0, 1.05] }],
+          imageData: {
+            assetId: 'default_bg',
+            url: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?q=80&w=1000&auto=format&fit=crop',
+          },
+        },
+        {
+          id: 'bars_1',
           name: 'Radial Spectrum',
           type: 'Bars',
           transform: { position: [0, 0], scale: [1, 1], rotation: 0, opacity: 1 },
-          bindings: [{ source: 'Bass', target: 'ScaleUniform', outputRange: [0.95, 1.15] }],
+          bindings: [{ source: 'Bass', target: 'ScaleUniform', outputRange: [1.0, 1.15] }],
           barsData: {
             count: 64,
-            innerRadius: 18,
-            width: 1.8,
+            innerRadius: 240,
+            width: 4,
             isRadial: true,
-            colorStart: [0.0, 0.9, 1.0, 1.0],
-            colorEnd: [1.0, 0.1, 0.7, 1.0],
+            colorStart: [0, 0.94, 1, 1],
+            colorEnd: [1, 0, 0.63, 1],
           },
         },
         {
-          id: 'center_logo',
-          name: 'Center Logo',
-          type: 'Image',
-          transform: { position: [0, 0], scale: [0.8, 0.8], rotation: 0, opacity: 1 },
-          bindings: [{ source: 'Beat', target: 'ScaleUniform', outputRange: [0.9, 1.1] }],
-          imageData: {
-            assetId: 'default_logo',
+          id: 'text_1',
+          name: 'Track Title',
+          type: 'Text',
+          transform: { position: [0, -380], scale: [1, 1], rotation: 0, opacity: 1 },
+          bindings: [{ source: 'Beat', target: 'ScaleUniform', outputRange: [1.0, 1.08] }],
+          textData: {
+            text: 'CYBERPUNK VISUALS - OPENVIZ 2.0',
+            size: 28,
           },
         },
       ],
-      postEffects: [],
     };
   }
 
   private setupUIEvents() {
-    // Template Input
+    // Template Import / File Drop
     const templateInput = document.getElementById('templateInput') as HTMLInputElement;
     if (templateInput) {
       templateInput.addEventListener('change', async (e) => {
@@ -215,16 +230,16 @@ export class StudioController {
         bindings: [{ source: 'Bass', target: 'ScaleUniform', outputRange: [1, 1.2] }],
         barsData: {
           count: 64,
-          innerRadius: 15,
-          width: 2,
+          innerRadius: 240,
+          width: 4,
           isRadial: true,
-          colorStart: [0, 0.8, 1, 1],
-          colorEnd: [1, 0, 0.8, 1],
+          colorStart: [0, 0.94, 1, 1],
+          colorEnd: [1, 0, 0.63, 1],
         },
       };
-      this.template.nodes.push(newNode);
-      this.scene.loadTemplate(this.template);
+      this.scene.addNode(newNode);
       this.scene.selectNode(newNode.id);
+      this.renderLayersList();
     });
 
     this.renderLayersList();
@@ -318,27 +333,36 @@ export class StudioController {
 
     document.getElementById('posXInput')?.addEventListener('input', (e) => {
       node.transform.position[0] = parseFloat((e.target as HTMLInputElement).value) || 0;
-      this.scene.loadTemplate(this.template);
-      this.scene.selectNode(node.id);
+      this.scene.updateNode(node.id);
     });
 
     document.getElementById('posYInput')?.addEventListener('input', (e) => {
       node.transform.position[1] = parseFloat((e.target as HTMLInputElement).value) || 0;
-      this.scene.loadTemplate(this.template);
-      this.scene.selectNode(node.id);
+      this.scene.updateNode(node.id);
+    });
+
+    document.getElementById('scaleXInput')?.addEventListener('input', (e) => {
+      node.transform.scale[0] = parseFloat((e.target as HTMLInputElement).value) || 1;
+      this.scene.updateNode(node.id);
+    });
+
+    document.getElementById('scaleYInput')?.addEventListener('input', (e) => {
+      node.transform.scale[1] = parseFloat((e.target as HTMLInputElement).value) || 1;
+      this.scene.updateNode(node.id);
     });
   }
 
   private startRenderLoop() {
     const loop = () => {
       const audioData = this.audioEngine.getFrequencyData();
-      this.scene.updateAudioReactivity(audioData);
+      const timeSeconds = this.audioEngine.getCurrentTime();
+      this.scene.updateAudioReactivity(audioData, timeSeconds);
 
       // Update time display and scrubber
       const timeDisplay = document.getElementById('timeDisplay');
       const scrubber = document.getElementById('timelineScrubber') as HTMLInputElement;
 
-      const curr = this.audioEngine.getCurrentTime();
+      const curr = timeSeconds;
       const dur = this.audioEngine.getDuration();
 
       if (timeDisplay) {
