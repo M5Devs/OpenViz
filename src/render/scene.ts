@@ -98,6 +98,8 @@ export class VisualizerScene {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: false });
     this.renderer.setPixelRatio(Math.min(typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1, 2));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.domElement.style.cssText =
+      'position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none';
     if (container && container.appendChild) {
       this.renderer.setSize(container.clientWidth || 1920, container.clientHeight || 1080, false);
       container.appendChild(this.renderer.domElement);
