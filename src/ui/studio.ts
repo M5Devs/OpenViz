@@ -1,3 +1,4 @@
+import { getMonstercatPreset, getRadialPulsePreset, getLofiChillPreset } from '../render/presets';
 import JSZip from 'jszip';
 import { computeExportSize } from '../export/avc';
 import { parseAspect } from '../render/scene';
@@ -169,6 +170,28 @@ export class StudioController {
       });
     }
 
+
+
+    // Visualizer Preset Selection
+    const presetSelect = document.getElementById('presetSelect') as HTMLSelectElement | null;
+    if (presetSelect) {
+      presetSelect.addEventListener('change', () => {
+        const val = presetSelect.value;
+        if (val === 'monstercat') {
+          this.template = getMonstercatPreset();
+        } else if (val === 'radial') {
+          this.template = getRadialPulsePreset();
+        } else if (val === 'lofi') {
+          this.template = getLofiChillPreset();
+        } else {
+          this.template = this.getDefaultTemplate();
+        }
+        this.scene.loadTemplate(this.template);
+        this.renderLayersList();
+        this.renderInspector();
+        this.showStatus(`Loaded ${this.template.name} preset.`);
+      });
+    }
 
     // Audio Input
     const audioInput = document.getElementById('audioInput') as HTMLInputElement;

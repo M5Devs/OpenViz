@@ -1,3 +1,14 @@
+/**
+ * Avee Player logarithmic spacing formula for frequency band distribution.
+ * Calculates center/boundary frequency for band `index` out of `total` bands.
+ */
+export function logSpace(minFreq: number, maxFreq: number, index: number, total: number, linearFactor: number): number {
+  if (total <= 0) return minFreq;
+  const centerFreq = minFreq * Math.pow(maxFreq / minFreq, index / total);
+  const linFreq = minFreq + (maxFreq - minFreq) * (index / total);
+  return centerFreq * (1.0 - linearFactor) + linFreq * linearFactor;
+}
+
 import { FrequencyData } from '../types';
 import { FFT } from './fft';
 
@@ -98,10 +109,7 @@ export class SpectrumAnalyzer {
 
     const edgesHz: number[] = [];
     for (let i = 0; i <= this.bandsCount; i++) {
-      const frac = i / this.bandsCount;
-      const logHz = Math.exp(logLow + frac * (logHigh - logLow));
-      const linHz = minHz + frac * (maxHz - minHz);
-      const blendedHz = (1 - this.linearMix) * logHz + this.linearMix * linHz;
+      const blendedHz = logSpace(minHz, maxHz, i, this.bandsCount, this.linearMix);
       edgesHz.push(blendedHz);
       // convert Hz to fractional bin k = f * fftSize / sampleRate
       this.bandEdgesBins[i] = (blendedHz * this.fftSize) / this.sampleRate;
