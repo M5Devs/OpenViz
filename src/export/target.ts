@@ -5,13 +5,22 @@ export type MuxerTargetType = ArrayBufferTarget | FileSystemWritableFileStreamTa
 export interface OutputTargetOptions {
   suggestedName?: string;
   estimatedBytes: number;
+  forceMemoryMode?: boolean;
 }
 
 export interface OutputTarget {
   kind: 'disk' | 'memory';
   muxerTarget: MuxerTargetType;
+  fatalError?: Error | null;
   finalize(): Promise<Blob | null>;
   abort(): Promise<void>;
+}
+
+export function supportsDiskExport(): boolean {
+  if (typeof window === 'undefined') return false;
+  const hasSavePicker = typeof (window as any).showSaveFilePicker === 'function';
+  const isCoarse = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches;
+  return hasSavePicker && !isCoarse;
 }
 
 export function getMemoryGuardThresholdBytes(): number {
@@ -31,7 +40,7 @@ export async function createOutputTarget(options: OutputTargetOptions): Promise<
   const suggestedName = options.suggestedName || 'openviz_render.mp4';
   const estimatedBytes = options.estimatedBytes;
 
-  if (typeof window !== 'undefined' && typeof (window as any).showSaveFilePicker === 'function') {
+  if (supportsDiskExport() && !options.forceMemoryMode) {
     // Disk mode: prompt for save file picker immediately
     const handle = await (window as any).showSaveFilePicker({
       suggestedName,
@@ -59,16 +68,27 @@ export async function createOutputTarget(options: OutputTargetOptions): Promise<
     }
 
     const writable = await handle.createWritable();
-    const muxerTarget = new FileSystemWritableFileStreamTarget(writable);
 
-    return {
+    let writeQueue: Promise<void> = Promise.resolve();
+
+    const targetObj: OutputTarget = {
       kind: 'disk',
-      muxerTarget,
+      muxerTarget: null as any,
+      fatalError: null,
       async finalize() {
+        await writeQueue;
+        if (targetObj.fatalError) {
+          throw targetObj.fatalError;
+        }
         await writable.close();
         return null;
       },
       async abort() {
+        try {
+          await writeQueue;
+        } catch (e) {
+          // Ignore write errors on abort
+        }
         try {
           await writable.abort();
         } catch (e) {
@@ -76,6 +96,25 @@ export async function createOutputTarget(options: OutputTargetOptions): Promise<
         }
       },
     };
+
+    const muxerTarget = new StreamTarget({
+      onData: (data: Uint8Array, position: number) => {
+        if (targetObj.fatalError) return;
+        writeQueue = writeQueue
+          .then(async () => {
+            if (targetObj.fatalError) return;
+            await writable.write({ type: 'write', data, position });
+          })
+          .catch((err) => {
+            if (!targetObj.fatalError) {
+              targetObj.fatalError = err instanceof Error ? err : new Error(String(err));
+            }
+          });
+      },
+    });
+
+    targetObj.muxerTarget = muxerTarget;
+    return targetObj;
   } else {
     // Memory mode
     const threshold = getMemoryGuardThresholdBytes();
@@ -95,6 +134,7 @@ export async function createOutputTarget(options: OutputTargetOptions): Promise<
     return {
       kind: 'memory',
       muxerTarget,
+      fatalError: null,
       async finalize() {
         const buffer = muxerTarget.buffer;
         return new Blob([buffer], { type: 'video/mp4' });

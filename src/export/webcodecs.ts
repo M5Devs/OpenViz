@@ -241,6 +241,25 @@ export async function exportVideo(
     document.addEventListener('visibilitychange', handleVisibilityChange);
   }
 
+  const handleUnhandledRejection = (event: any) => {
+    const reason = event?.reason ?? event;
+    const name = reason?.name || (reason instanceof Error ? reason.name : '');
+    if (name === 'NotFoundError' || name === 'AbortError') {
+      if (typeof event?.preventDefault === 'function') {
+        event.preventDefault();
+      }
+      if (target && !target.fatalError) {
+        target.fatalError = reason instanceof Error ? reason : new Error(String(reason));
+      }
+    }
+  };
+
+  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    window.addEventListener('unhandledrejection', handleUnhandledRejection);
+  } else if (typeof globalThis !== 'undefined' && typeof globalThis.addEventListener === 'function') {
+    globalThis.addEventListener('unhandledrejection', handleUnhandledRejection);
+  }
+
   const muxerOptions: Mp4Muxer.MuxerOptions<any> = {
     target: target.muxerTarget,
     video: {
@@ -300,6 +319,9 @@ export async function exportVideo(
       if (encoderError) {
         throw encoderError;
       }
+      if (target.fatalError) {
+        throw target.fatalError;
+      }
       await new Promise<void>((resolve) => {
         let tid: any;
         const onDequeue = () => {
@@ -323,6 +345,7 @@ export async function exportVideo(
 
     while (audioSampleOffset < targetSample && audioSampleOffset < totalAudioSamples) {
       if (encoderError) throw encoderError;
+      if (target.fatalError) throw target.fatalError;
 
       const chunkSize = Math.min(AUDIO_CHUNK_SIZE, totalAudioSamples - audioSampleOffset);
       const pcmData = new Float32Array(channels * chunkSize);
@@ -372,12 +395,18 @@ export async function exportVideo(
       if (encoderError) {
         throw encoderError;
       }
+      if (target.fatalError) {
+        throw target.fatalError;
+      }
 
       const timeInSeconds = frame / fps;
 
       if (audioEncoder) {
         feedAudioUpTo(timeInSeconds + 0.5);
         await waitForBackpressure(audioEncoder);
+        if (target.fatalError) {
+          throw target.fatalError;
+        }
       }
 
       let freqData: FrequencyData;
@@ -411,9 +440,15 @@ export async function exportVideo(
 
       const isKeyframe = frame % (fps * 2) === 0;
 
-      await waitForBackpressure(videoEncoder);
-      videoEncoder.encode(videoFrame, { keyFrame: isKeyframe });
-      videoFrame.close();
+      try {
+        await waitForBackpressure(videoEncoder);
+        if (target.fatalError) {
+          throw target.fatalError;
+        }
+        videoEncoder.encode(videoFrame, { keyFrame: isKeyframe });
+      } finally {
+        videoFrame.close();
+      }
 
       if (onProgress) {
         onProgress({
@@ -426,12 +461,18 @@ export async function exportVideo(
 
       if (frame % 10 === 0) {
         await yieldToEventLoop();
+        if (target.fatalError) {
+          throw target.fatalError;
+        }
       }
     }
 
     if (audioEncoder) {
       feedAudioUpTo(duration + 1.0);
       await waitForBackpressure(audioEncoder);
+      if (target.fatalError) {
+        throw target.fatalError;
+      }
     }
 
     if (signal?.aborted) {
@@ -439,6 +480,9 @@ export async function exportVideo(
     }
     if (encoderError) {
       throw encoderError;
+    }
+    if (target.fatalError) {
+      throw target.fatalError;
     }
 
     if (onProgress) {
@@ -451,8 +495,14 @@ export async function exportVideo(
     }
 
     await videoEncoder.flush();
+    if (target.fatalError) {
+      throw target.fatalError;
+    }
     if (audioEncoder) {
       await audioEncoder.flush();
+      if (target.fatalError) {
+        throw target.fatalError;
+      }
     }
 
     muxer.finalize();
@@ -476,6 +526,11 @@ export async function exportVideo(
     await target.abort();
     throw err;
   } finally {
+    if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
+      window.removeEventListener('unhandledrejection', handleUnhandledRejection);
+    } else if (typeof globalThis !== 'undefined' && typeof globalThis.removeEventListener === 'function') {
+      globalThis.removeEventListener('unhandledrejection', handleUnhandledRejection);
+    }
     if (typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     }

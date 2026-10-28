@@ -1,11 +1,11 @@
 import { computeExportSize } from '../export/avc';
 import { parseAspect } from '../render/scene';
-import { createOutputTarget, getMemoryGuardThresholdBytes, OutputTarget } from '../export/target';
+import { createOutputTarget, getMemoryGuardThresholdBytes, OutputTarget, supportsDiskExport } from '../export/target';
 import { acquireWakeLock } from '../export/wakelock';
 import { recommendExportSettings, estimateExportSizeBytes } from '../export/defaults';
 import { importAveeViz } from '../importer/avee';
 import { AudioEngine } from '../audio/engine';
-import { exportVideo } from '../export/webcodecs';
+import { exportVideo, ExportResult } from '../export/webcodecs';
 import { VisualizerScene } from '../render/scene';
 import { OpenVizNode, OpenVizTemplate } from '../types';
 import { el } from './dom';
@@ -147,8 +147,10 @@ export class StudioController {
           this.renderLayersList();
           this.renderInspector();
           this.showStatus('Template loaded successfully.');
-        } catch (err) {
-          this.showStatus(`Template import error: ${(err as Error).message}`, true);
+        } catch (err: any) {
+          const errName = err?.name || 'Error';
+          const errMsg = err?.message || String(err);
+          this.showStatus(`Template import error: ${errName}: ${errMsg}`, true);
         }
       });
     }
@@ -275,7 +277,7 @@ export class StudioController {
         exportEstimateSize.textContent = mb >= 1000 ? `${(mb / 1024).toFixed(2)} GB` : `${mb.toFixed(1)} MB`;
       }
 
-      const isDisk = typeof window !== 'undefined' && typeof (window as any).showSaveFilePicker === 'function';
+      const isDisk = supportsDiskExport();
       if (exportOutputMode) {
         exportOutputMode.textContent = isDisk ? 'Direct to disk' : 'In memory';
         exportOutputMode.className = isDisk ? 'text-emerald-400 font-medium' : 'text-amber-400 font-medium';
@@ -319,14 +321,12 @@ export class StudioController {
           !!this.audioBuffer
         );
 
-        const targetPromise = createOutputTarget({
-          suggestedName: 'openviz_render.mp4',
-          estimatedBytes,
-        });
-
         let target: OutputTarget;
         try {
-          target = await targetPromise;
+          target = await createOutputTarget({
+            suggestedName: 'openviz_render.mp4',
+            estimatedBytes,
+          });
         } catch (err: any) {
           if (err?.name === 'AbortError') {
             const statusEl = document.getElementById('exportStatusMessage');
@@ -337,7 +337,10 @@ export class StudioController {
             }
             return;
           }
-          this.showStatus('Export target error: ' + (err as Error).message, true);
+          const errName = err?.name || 'Error';
+          const errMsg = err?.message || String(err);
+          console.error('Export failed:', errName, errMsg, err?.stack || '');
+          this.showStatus(`${errName}: ${errMsg}`, true);
           return;
         }
 
@@ -353,28 +356,72 @@ export class StudioController {
         const statusEl = document.getElementById('exportStatusMessage');
 
         try {
-          const result = await exportVideo(
-            this.scene,
-            this.audioBuffer,
-            duration,
-            {
-              width: size.width,
-              height: size.height,
-              fps,
-              quality,
-              target,
-              onVisibilityWarning: (msg) => {
-                if (statusEl) {
-                  statusEl.textContent = msg;
-                  statusEl.classList.remove('hidden');
-                }
+          let attemptTarget = target;
+          let isRetry = false;
+          let result: ExportResult;
+
+          try {
+            result = await exportVideo(
+              this.scene,
+              this.audioBuffer,
+              duration,
+              {
+                width: size.width,
+                height: size.height,
+                fps,
+                quality,
+                target: attemptTarget,
+                onVisibilityWarning: (msg) => {
+                  if (statusEl) {
+                    statusEl.textContent = msg;
+                    statusEl.classList.remove('hidden');
+                  }
+                },
               },
-            },
-            (progress) => {
-              exportBtn.textContent = `${progress.percent}%`;
-            },
-            exportAbortController.signal
-          );
+              (progress) => {
+                exportBtn.textContent = `${progress.percent}%`;
+              },
+              exportAbortController.signal
+            );
+          } catch (err: any) {
+            if (exportAbortController.signal.aborted || (err?.name === 'AbortError' && exportAbortController.signal.aborted)) {
+              throw err;
+            }
+            if (attemptTarget.kind === 'disk' && !isRetry) {
+              await attemptTarget.abort();
+              this.showStatus('Saving to disk failed, retrying in memory');
+              isRetry = true;
+              attemptTarget = await createOutputTarget({
+                suggestedName: 'openviz_render.mp4',
+                estimatedBytes,
+                forceMemoryMode: true,
+              });
+              result = await exportVideo(
+                this.scene,
+                this.audioBuffer,
+                duration,
+                {
+                  width: size.width,
+                  height: size.height,
+                  fps,
+                  quality,
+                  target: attemptTarget,
+                  onVisibilityWarning: (msg) => {
+                    if (statusEl) {
+                      statusEl.textContent = msg;
+                      statusEl.classList.remove('hidden');
+                    }
+                  },
+                },
+                (progress) => {
+                  exportBtn.textContent = `${progress.percent}%`;
+                },
+                exportAbortController.signal
+              );
+            } else {
+              throw err;
+            }
+          }
 
           if (result.blob) {
             const url = URL.createObjectURL(result.blob);
@@ -402,11 +449,13 @@ export class StudioController {
 
           this.showStatus(statusMsg);
         } catch (err: any) {
-          if (err?.name === 'AbortError') {
+          const errName = err?.name || 'Error';
+          const errMsg = err?.message || String(err);
+          if (errName === 'AbortError' && exportAbortController.signal.aborted) {
             console.log('Export cancelled by user.');
           } else {
-            console.error('Export failed:', err);
-            this.showStatus('Export failed: ' + (err as Error).message, true);
+            console.error('Export failed:', errName, errMsg, err?.stack || '');
+            this.showStatus(`${errName}: ${errMsg}`, true);
           }
         } finally {
           await wakeLock.release();
