@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { FrequencyData, OpenVizNode, OpenVizTemplate } from '../types';
 import { computeAnimatedState } from './bindings';
+import { detectTextDirection, FONT_STACK } from './text';
 
 export function parseAspect(aspectStr?: string): number {
   if (!aspectStr) return 16 / 9;
@@ -91,12 +92,9 @@ export class VisualizerScene {
 
     this.scene = new THREE.Scene();
 
-    // Logical canvas frustum initialization
     this.camera = new THREE.OrthographicCamera(-960, 960, 540, -540, 0.1, 2000);
     this.camera.position.z = 1000;
 
-    // preserveDrawingBuffer: false
-    // Note: Phase 3 must create the VideoFrame synchronously right after render() with no await in between.
     this.renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: false });
     this.renderer.setPixelRatio(Math.min(typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1, 2));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -108,7 +106,6 @@ export class VisualizerScene {
     this.contentRoot = new THREE.Group();
     this.scene.add(this.contentRoot);
 
-    // Canvas bounds guide rectangle
     const guideGeom = new THREE.BufferGeometry();
     guideGeom.setAttribute(
       'position',
@@ -131,8 +128,6 @@ export class VisualizerScene {
     this.transformControls.setMode('translate');
     this.transformControls.setSize(0.75);
 
-    // TransformControls attaches ONLY to baseGroup.
-    // objectChange copies baseGroup -> node.transform. Nothing animated is ever read back.
     this.transformControls.addEventListener('objectChange', () => {
       if (!this.selectedNodeId) return;
       const entry = this.nodeEntries.get(this.selectedNodeId);
@@ -227,7 +222,6 @@ export class VisualizerScene {
     this.template = template;
     this.logicalAspect = parseAspect(template.canvasAspect);
 
-    // Rebuild canvas guide rectangle
     const lw = 1080 * this.logicalAspect;
     const lh = 1080;
     const halfW = lw / 2;
@@ -243,7 +237,6 @@ export class VisualizerScene {
     );
     this.guideRect.geometry = guideGeom;
 
-    // Clear existing nodes and dispose resources
     this.nodeEntries.forEach((entry) => {
       this.contentRoot.remove(entry.baseGroup);
       disposeObject3D(entry.baseGroup);
@@ -252,12 +245,10 @@ export class VisualizerScene {
     this.selectedNodeId = null;
     this.transformControls?.detach();
 
-    // Color management for clearColor
     const [r, g, b, a] = template.clearColor || [0, 0, 0, 1];
     this.clearColorObj.setRGB(r, g, b, THREE.SRGBColorSpace);
     this.renderer.setClearColor(this.clearColorObj, a);
 
-    // Build nodes
     for (let i = 0; i < template.nodes.length; i++) {
       this.buildAndAddNode(template.nodes[i], i);
     }
@@ -266,8 +257,6 @@ export class VisualizerScene {
     this.render();
   }
 
-  // Layer order = index in template.nodes (renderOrder = index * 10 so children can be offset).
-  // Note: nodes[0] is the bottom layer.
   private buildAndAddNode(node: OpenVizNode, index: number): NodeRenderEntry {
     const renderOrder = index * 10;
 
@@ -296,14 +285,7 @@ export class VisualizerScene {
         barWidth: node.barsData.width > 0 ? node.barsData.width : 4,
       };
     } else if (node.type === 'Image' && node.imageData) {
-      const nameLower = (node.name || '').toLowerCase();
-      const isWallpaper =
-        nameLower.includes('background') ||
-        nameLower.includes('wallpaper') ||
-        nameLower.includes('bg') ||
-        (node.transform.scale[0] >= 1000 && node.transform.scale[1] >= 500);
-
-      const imageMesh = this.createImageMesh(node.imageData, isWallpaper, renderOrder);
+      const imageMesh = this.createImageMesh(node, renderOrder);
       animGroup.add(imageMesh);
       materials.push(imageMesh.material as THREE.Material);
     } else if (node.type === 'Text' && node.textData) {
@@ -413,7 +395,6 @@ export class VisualizerScene {
 
     group.add(instancedMesh);
 
-    // Invisible hit proxy for selection
     let proxyWidth = 1400;
     let proxyHeight = 600;
     if (isRadial) {
@@ -432,17 +413,49 @@ export class VisualizerScene {
     return { group, instancedMesh, material: mat };
   }
 
-  private createImageMesh(imageData: any, isWallpaper: boolean, renderOrder: number): THREE.Mesh {
-    const assetUrl = imageData.url || (this.template?.assets && this.template.assets[imageData.assetId]);
-    const width = isWallpaper ? 1920 : 360;
-    const height = isWallpaper ? 1080 : 360;
-    const geom = new THREE.PlaneGeometry(width, height);
+  private createImageMesh(node: OpenVizNode, renderOrder: number): THREE.Mesh {
+    const imageData = node.imageData;
+    const geom = new THREE.PlaneGeometry(1, 1);
+    const fit = imageData?.fit || 'contain';
 
     let mat: THREE.MeshBasicMaterial;
+    const assetUrl = imageData?.url || (this.template?.assets && imageData?.assetId && this.template.assets[imageData.assetId]);
+
+    const mesh = new THREE.Mesh(geom);
+    mesh.renderOrder = renderOrder;
+    mesh.scale.set(360, 360, 1);
+
     if (assetUrl) {
       const texture = new THREE.TextureLoader().load(assetUrl, (tex) => {
         tex.colorSpace = THREE.SRGBColorSpace;
         tex.needsUpdate = true;
+        if (tex.image && tex.image.width && tex.image.height) {
+          const imgW = tex.image.width;
+          const imgH = tex.image.height;
+          const aspect = imgW / imgH;
+          let baseW = 360;
+          let baseH = 360;
+
+          if (fit === 'cover') {
+            const canvasAspect = this.logicalAspect;
+            if (aspect >= canvasAspect) {
+              baseH = 1080;
+              baseW = 1080 * aspect;
+            } else {
+              baseW = 1080 * canvasAspect;
+              baseH = baseW / aspect;
+            }
+          } else {
+            if (aspect >= 1) {
+              baseW = 360;
+              baseH = 360 / aspect;
+            } else {
+              baseH = 360;
+              baseW = 360 * aspect;
+            }
+          }
+          mesh.scale.set(baseW, baseH, 1);
+        }
         this.render();
       });
       texture.colorSpace = THREE.SRGBColorSpace;
@@ -464,14 +477,12 @@ export class VisualizerScene {
       });
     }
 
-    const mesh = new THREE.Mesh(geom, mat);
-    mesh.renderOrder = renderOrder;
+    mesh.material = mat;
     return mesh;
   }
 
   private createTextSprite(text: string, fontSize = 24, renderOrder: number): THREE.Sprite {
     if (typeof document === 'undefined') {
-      // Node/test fallback
       const spriteMat = new THREE.SpriteMaterial({
         transparent: true,
         depthTest: false,
@@ -483,15 +494,29 @@ export class VisualizerScene {
     }
 
     const canvas = document.createElement('canvas');
-    canvas.width = 1024;
-    canvas.height = 256;
     const ctx = canvas.getContext('2d');
+    const padding = 20;
+    const dir = detectTextDirection(text);
+
+    let canvasW = 512;
+    let canvasH = Math.ceil(fontSize * 1.4);
+
     if (ctx) {
-      ctx.font = `Bold ${fontSize * 2}px sans-serif`;
+      ctx.font = `Bold ${fontSize}px ${FONT_STACK}`;
+      const metrics = ctx.measureText(text);
+      const measuredW = Math.ceil(metrics.width);
+      canvasW = Math.max(1, measuredW + padding * 2);
+      canvasH = Math.max(1, Math.ceil(fontSize * 1.4));
+
+      canvas.width = canvasW;
+      canvas.height = canvasH;
+
+      ctx.font = `Bold ${fontSize}px ${FONT_STACK}`;
       ctx.fillStyle = '#ffffff';
+      ctx.direction = dir;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(text, 512, 128);
+      ctx.fillText(text, canvasW / 2, canvasH / 2);
     }
 
     const texture = new THREE.CanvasTexture(canvas);
@@ -503,7 +528,7 @@ export class VisualizerScene {
       depthWrite: false,
     });
     const sprite = new THREE.Sprite(spriteMat);
-    sprite.scale.set(400, 100, 1);
+    sprite.scale.set(canvasW, canvasH, 1);
     sprite.renderOrder = renderOrder;
     return sprite;
   }
@@ -525,7 +550,7 @@ export class VisualizerScene {
   public addNode(node: OpenVizNode) {
     if (!this.template) {
       this.template = {
-        schemaVersion: '1.0',
+        schemaVersion: 'openviz/1',
         name: 'Untitled',
         author: '',
         canvasAspect: '16:9',
@@ -597,7 +622,6 @@ export class VisualizerScene {
     for (const entry of this.nodeEntries.values()) {
       const state = computeAnimatedState(entry.node, audio, timeSeconds);
 
-      // Apply animGroup audio-driven local offsets
       entry.animGroup.scale.set(state.scaleMul, state.scaleMul, 1);
       entry.animGroup.rotation.z = state.rotAdd;
       entry.animGroup.position.set(state.shake[0], state.shake[1], 0);
@@ -605,13 +629,11 @@ export class VisualizerScene {
       totalSceneShakeX += state.sceneShake[0];
       totalSceneShakeY += state.sceneShake[1];
 
-      // Effective opacity = node.transform.opacity * opacity binding
       const effectiveOpacity = Math.max(0, Math.min(1, entry.node.transform.opacity * state.opacityMul));
       for (const mat of entry.materials) {
         mat.opacity = effectiveOpacity;
       }
 
-      // Bars update via linear interpolation across audio.spectrum
       if (entry.barsInstancedMesh && entry.barsData && audio.spectrum && audio.spectrum.length > 0) {
         const { count, isRadial, innerRadius } = entry.barsData;
         const spectrum = audio.spectrum;
@@ -645,7 +667,6 @@ export class VisualizerScene {
       }
     }
 
-    // Apply sceneShake to contentRoot
     this.contentRoot.position.set(totalSceneShakeX, totalSceneShakeY, 0);
 
     this.render();

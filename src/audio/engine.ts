@@ -1,16 +1,47 @@
 import { DSPState, FrequencyData } from '../types';
 import { SpectrumAnalyzer } from './analysis';
 
+export function mulberry32(a: number) {
+  return function () {
+    let t = (a += 0x6d2b79f5);
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+export function generateImpulseResponse(ctx: AudioContext, durationSeconds = 2.5, decay = 3.0): AudioBuffer {
+  const sampleRate = ctx.sampleRate || 44100;
+  const length = Math.floor(sampleRate * durationSeconds);
+  const buffer = ctx.createBuffer(2, length, sampleRate);
+
+  const prngL = mulberry32(0x12345678);
+  const prngR = mulberry32(0x87654321);
+
+  const left = buffer.getChannelData(0);
+  const right = buffer.getChannelData(1);
+
+  for (let i = 0; i < length; i++) {
+    const t = i / length;
+    const env = Math.exp(-t * decay);
+    left[i] = (prngL() * 2 - 1) * env;
+    right[i] = (prngR() * 2 - 1) * env;
+  }
+
+  return buffer;
+}
+
 export class AudioEngine {
   private ctx: AudioContext | null = null;
   private audioEl: HTMLAudioElement;
   private sourceNode: MediaElementAudioSourceNode | null = null;
   private bassFilter: BiquadFilterNode | null = null;
   private stereoPanner: StereoPannerNode | null = null;
-  private analyser: AnalyserNode | null = null;
-  private delayNode: DelayNode | null = null;
-  private feedbackGain: GainNode | null = null;
+  private pannerOsc: OscillatorNode | null = null;
+  private pannerGain: GainNode | null = null;
+  private convolverNode: ConvolverNode | null = null;
   private wetGain: GainNode | null = null;
+  private analyser: AnalyserNode | null = null;
 
   private dspState: DSPState = {
     bassBoostDb: 0,
@@ -19,8 +50,8 @@ export class AudioEngine {
     eightD: false,
   };
 
-  private lfoAngle = 0;
-  private animationFrameId: number | null = null;
+  private audioObjectUrl: string | null = null;
+  private decodedAudioBuffer: AudioBuffer | null = null;
   private timeDomainBuffer: Float32Array = new Float32Array(4096);
   private spectrumAnalyzer: SpectrumAnalyzer | null = null;
 
@@ -49,27 +80,32 @@ export class AudioEngine {
     this.bassFilter.frequency.setValueAtTime(120, this.ctx.currentTime);
     this.bassFilter.gain.setValueAtTime(0, this.ctx.currentTime);
 
-    // Create Delay / Reverb network for Slowed + Reverb
-    this.delayNode = this.ctx.createDelay();
-    this.delayNode.delayTime.setValueAtTime(0.35, this.ctx.currentTime);
-
-    this.feedbackGain = this.ctx.createGain();
-    this.feedbackGain.gain.setValueAtTime(0.4, this.ctx.currentTime);
-
-    this.wetGain = this.ctx.createGain();
-    this.wetGain.gain.setValueAtTime(0, this.ctx.currentTime); // disabled by default
-
-    // Delay loop
-    this.delayNode.connect(this.feedbackGain);
-    this.feedbackGain.connect(this.delayNode);
-    this.delayNode.connect(this.wetGain);
-
-    // Create 8D Audio Stereo Panner
-    if (typeof this.ctx.createStereoPanner === 'function') {
-      this.stereoPanner = this.ctx.createStereoPanner();
+    // Create Reverb via ConvolverNode
+    if (typeof this.ctx.createConvolver === 'function') {
+      this.convolverNode = this.ctx.createConvolver();
+      this.convolverNode.buffer = generateImpulseResponse(this.ctx);
     }
 
-    // Create FFT Analyser Node for time domain samples ONLY
+    this.wetGain = this.ctx.createGain();
+    this.wetGain.gain.setValueAtTime(0, this.ctx.currentTime);
+
+    // Create 8D Audio Oscillator -> Gain -> StereoPanner.pan
+    if (typeof this.ctx.createStereoPanner === 'function' && typeof this.ctx.createOscillator === 'function') {
+      this.stereoPanner = this.ctx.createStereoPanner();
+
+      this.pannerOsc = this.ctx.createOscillator();
+      this.pannerOsc.type = 'sine';
+      this.pannerOsc.frequency.setValueAtTime(0.125, this.ctx.currentTime);
+
+      this.pannerGain = this.ctx.createGain();
+      this.pannerGain.gain.setValueAtTime(0, this.ctx.currentTime);
+
+      this.pannerOsc.connect(this.pannerGain);
+      this.pannerGain.connect(this.stereoPanner.pan);
+      this.pannerOsc.start();
+    }
+
+    // Create FFT Analyser
     this.analyser = this.ctx.createAnalyser();
     this.analyser.fftSize = 4096;
 
@@ -79,17 +115,16 @@ export class AudioEngine {
       bands: 64,
     });
 
-    // Connect Audio Graph:
-    // Source -> BassFilter -> (StereoPanner / Direct) -> Analyser -> Destination
-    //                       -> Delay -> WetGain -----^
+    // Connect Graph
     this.sourceNode.connect(this.bassFilter);
 
+    if (this.convolverNode && this.wetGain) {
+      this.bassFilter.connect(this.convolverNode);
+      this.convolverNode.connect(this.wetGain);
+      this.wetGain.connect(this.analyser);
+    }
+
     let lastNode: AudioNode = this.bassFilter;
-
-    // Connect Delay
-    this.bassFilter.connect(this.delayNode);
-    this.wetGain.connect(this.analyser);
-
     if (this.stereoPanner) {
       lastNode.connect(this.stereoPanner);
       lastNode = this.stereoPanner;
@@ -97,8 +132,6 @@ export class AudioEngine {
 
     lastNode.connect(this.analyser);
     this.analyser.connect(this.ctx.destination);
-
-    this.startLfoLoop();
   }
 
   public async loadAudio(source: string | File | Blob) {
@@ -107,13 +140,32 @@ export class AudioEngine {
       await this.ctx.resume();
     }
 
+    if (this.audioObjectUrl) {
+      URL.revokeObjectURL(this.audioObjectUrl);
+      this.audioObjectUrl = null;
+    }
+
     if (typeof source === 'string') {
       this.audioEl.src = source;
     } else {
-      const url = URL.createObjectURL(source);
-      this.audioEl.src = url;
+      this.audioObjectUrl = URL.createObjectURL(source);
+      this.audioEl.src = this.audioObjectUrl;
     }
     this.audioEl.load();
+  }
+
+  public async decodeFile(file: File | Blob): Promise<AudioBuffer> {
+    this.init();
+    if (!this.ctx) {
+      throw new Error('AudioContext unavailable');
+    }
+    const arrayBuffer = await file.arrayBuffer();
+    this.decodedAudioBuffer = await this.ctx.decodeAudioData(arrayBuffer);
+    return this.decodedAudioBuffer;
+  }
+
+  public getAudioBuffer(): AudioBuffer | null {
+    return this.decodedAudioBuffer;
   }
 
   public play() {
@@ -157,14 +209,22 @@ export class AudioEngine {
       this.audioEl.playbackRate = 0.85;
       (this.audioEl as any).preservesPitch = false;
       if (this.wetGain && this.ctx) {
-        this.wetGain.gain.setValueAtTime(0.5, this.ctx.currentTime);
+        if (typeof this.wetGain.gain.setTargetAtTime === 'function') {
+          this.wetGain.gain.setTargetAtTime(0.35, this.ctx.currentTime, 0.05);
+        } else {
+          this.wetGain.gain.setValueAtTime(0.35, this.ctx.currentTime);
+        }
       }
     } else {
       if (!this.dspState.nightcore) {
         this.audioEl.playbackRate = 1.0;
       }
       if (this.wetGain && this.ctx) {
-        this.wetGain.gain.setValueAtTime(0, this.ctx.currentTime);
+        if (typeof this.wetGain.gain.setTargetAtTime === 'function') {
+          this.wetGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.05);
+        } else {
+          this.wetGain.gain.setValueAtTime(0, this.ctx.currentTime);
+        }
       }
     }
   }
@@ -174,7 +234,11 @@ export class AudioEngine {
     if (active) {
       this.dspState.slowedReverb = false;
       if (this.wetGain && this.ctx) {
-        this.wetGain.gain.setValueAtTime(0, this.ctx.currentTime);
+        if (typeof this.wetGain.gain.setTargetAtTime === 'function') {
+          this.wetGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.05);
+        } else {
+          this.wetGain.gain.setValueAtTime(0, this.ctx.currentTime);
+        }
       }
       this.audioEl.playbackRate = 1.25;
       (this.audioEl as any).preservesPitch = false;
@@ -187,6 +251,14 @@ export class AudioEngine {
 
   public set8DAudio(active: boolean) {
     this.dspState.eightD = active;
+    if (this.pannerGain && this.ctx) {
+      const target = active ? 1 : 0;
+      if (typeof this.pannerGain.gain.setTargetAtTime === 'function') {
+        this.pannerGain.gain.setTargetAtTime(target, this.ctx.currentTime, 0.05);
+      } else {
+        this.pannerGain.gain.setValueAtTime(target, this.ctx.currentTime);
+      }
+    }
     if (!active && this.stereoPanner && this.ctx) {
       this.stereoPanner.pan.setValueAtTime(0, this.ctx.currentTime);
     }
@@ -194,22 +266,6 @@ export class AudioEngine {
 
   public getDSPState(): DSPState {
     return { ...this.dspState };
-  }
-
-  private startLfoLoop() {
-    const update = () => {
-      if (this.dspState.eightD && this.stereoPanner && this.ctx) {
-        this.lfoAngle += 0.02;
-        const panValue = Math.sin(this.lfoAngle); // oscillates between -1 and +1
-        this.stereoPanner.pan.setValueAtTime(panValue, this.ctx.currentTime);
-      }
-      if (typeof requestAnimationFrame === 'function') {
-        this.animationFrameId = requestAnimationFrame(update);
-      }
-    };
-    if (typeof requestAnimationFrame === 'function') {
-      this.animationFrameId = requestAnimationFrame(update);
-    }
   }
 
   public getFrequencyData(): FrequencyData {
@@ -231,8 +287,13 @@ export class AudioEngine {
   }
 
   public dispose() {
-    if (this.animationFrameId !== null && typeof cancelAnimationFrame === 'function') {
-      cancelAnimationFrame(this.animationFrameId);
+    if (this.audioObjectUrl) {
+      URL.revokeObjectURL(this.audioObjectUrl);
+      this.audioObjectUrl = null;
+    }
+    if (this.pannerOsc) {
+      try { this.pannerOsc.stop(); } catch {}
+      this.pannerOsc = null;
     }
     if (this.ctx) {
       this.ctx.close();

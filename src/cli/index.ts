@@ -65,7 +65,10 @@ export function runCLI(argv: string[]) {
         }
 
         const buffer = fs.readFileSync(resolvedPath);
-        const template = await importAveeViz(buffer);
+        const template = await importAveeViz(buffer, {
+          assetMode: 'dataUrl',
+          maxFileBytes: 5 * 1024 * 1024,
+        });
 
         const outputPath = path.resolve(options.output);
         fs.writeFileSync(outputPath, JSON.stringify(template, null, 2), 'utf-8');
