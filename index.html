@@ -128,7 +128,8 @@
       <main class="flex-1 bg-black relative flex items-center justify-center overflow-hidden">
         <div id="statusLine" class="hidden absolute top-3 left-1/2 -translate-x-1/2 z-30 px-4 py-1.5 bg-rose-600/90 text-white font-semibold text-xs rounded-full shadow-lg border border-rose-400"></div>
         <div id="exportStatusMessage" class="hidden absolute top-3 left-1/2 -translate-x-1/2 z-30 px-4 py-1.5 bg-amber-500/90 text-slate-950 font-semibold text-xs rounded-full shadow-lg border border-amber-300"></div>
-        <canvas id="studioCanvas" class="w-full h-full object-contain cursor-crosshair"></canvas>
+        <!-- placeholder only: VisualizerScene creates and mounts its own renderer canvas -->
+        <canvas id="studioCanvas" class="hidden"></canvas>
       </main>
 
       <!-- Right Panel: Property Inspector -->
