@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { pickAvcLevel, computeExportSize } from '../src/export/avc';
 import { exportVideo, downmixAudioBufferToMono } from '../src/export/webcodecs';
+import { createOutputTarget, getMemoryGuardThresholdBytes, supportsDiskExport } from '../src/export/target';
+import { acquireWakeLock } from '../src/export/wakelock';
+import { recommendExportSettings, yieldToEventLoop } from '../src/export/defaults';
 
 describe('AVC level selection (pickAvcLevel)', () => {
   it('correctly maps resolutions and framerates to H.264 level_idc values', () => {
@@ -460,12 +463,118 @@ describe('Mocked WebCodecs export integration tests', () => {
       expect(freq1.high).toBeCloseTo(freq2.high);
     }
   });
+
+  it('closes VideoFrame in finally even when waitForBackpressure throws', async () => {
+    let closedFrameCount = 0;
+    class FrameTrackingVideoFrame {
+      close() {
+        closedFrameCount++;
+      }
+    }
+
+    class FailingVideoEncoder {
+      public state = 'configured';
+      public encodeQueueSize = 10; // Trigger backpressure loop
+      private callbacks: any;
+      constructor(callbacks: any) {
+        this.callbacks = callbacks;
+      }
+      static isConfigSupported = vi.fn().mockResolvedValue({ supported: true, hardwareAcceleration: 'prefer-hardware' });
+      configure() {}
+      encode() {}
+      addEventListener(evt: string, fn: Function) {
+        if (evt === 'dequeue') {
+          // Immediately throw error in encoder callback
+          setTimeout(() => {
+            if (this.callbacks.error) {
+              this.callbacks.error(new Error('Queue failure during backpressure'));
+            }
+          }, 1);
+        }
+      }
+      removeEventListener() {}
+      async flush() {}
+      close() { this.state = 'closed'; }
+    }
+
+    (globalThis as any).VideoFrame = FrameTrackingVideoFrame;
+    (globalThis as any).VideoEncoder = FailingVideoEncoder;
+
+    const mockScene = {
+      beginExport: vi.fn(),
+      endExport: vi.fn(),
+      renderer: { domElement: {} },
+      updateAudioReactivity: vi.fn(),
+      render: vi.fn(),
+    } as any;
+
+    try {
+      await exportVideo(mockScene, null, 1, { height: 720, fps: 60 });
+      expect.unreachable('Should have thrown error');
+    } catch (err: any) {
+      expect(err.message).toBe('Queue failure during backpressure');
+    }
+
+    expect(closedFrameCount).toBeGreaterThan(0);
+  });
+
+  it('stream target write rejecting with NotFoundError sets fatalError, removes unhandledrejection listener in finally, and aborts loop without unhandled rejection', async () => {
+    let listenerAdded = false;
+    let listenerRemoved = false;
+
+    const mockWindow = {
+      addEventListener: (evt: string, fn: Function) => {
+        if (evt === 'unhandledrejection') {
+          listenerAdded = true;
+        }
+      },
+      removeEventListener: (evt: string, fn: Function) => {
+        if (evt === 'unhandledrejection') {
+          listenerRemoved = true;
+        }
+      },
+      matchMedia: () => ({ matches: false }),
+    };
+    (globalThis as any).window = mockWindow;
+
+    const notFoundErr = new DOMException('A requested file or directory could not be found.', 'NotFoundError');
+    const mockWritable = {
+      write: vi.fn().mockRejectedValue(notFoundErr),
+      close: vi.fn().mockResolvedValue(undefined),
+      abort: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const mockHandle = {
+      createWritable: vi.fn().mockResolvedValue(mockWritable),
+    };
+    (mockWindow as any).showSaveFilePicker = vi.fn().mockResolvedValue(mockHandle);
+
+    const target = await createOutputTarget({ suggestedName: 'test.mp4', estimatedBytes: 10 * 1024 * 1024 });
+    expect(target.kind).toBe('disk');
+
+    const mockScene = {
+      beginExport: vi.fn(),
+      endExport: vi.fn(),
+      renderer: { domElement: {} },
+      updateAudioReactivity: vi.fn(),
+      render: vi.fn(),
+    } as any;
+
+    try {
+      await exportVideo(mockScene, null, 1, { height: 720, fps: 60, target });
+      expect.unreachable('Should have thrown NotFoundError');
+    } catch (err: any) {
+      expect(err.name).toBe('NotFoundError');
+    }
+
+    expect(listenerAdded).toBe(true);
+    expect(listenerRemoved).toBe(true);
+    expect(target.fatalError).toBeDefined();
+    expect(target.fatalError?.name).toBe('NotFoundError');
+
+    delete (globalThis as any).window;
+  });
 });
-
-
-import { createOutputTarget, getMemoryGuardThresholdBytes } from '../src/export/target';
-import { acquireWakeLock } from '../src/export/wakelock';
-import { recommendExportSettings, yieldToEventLoop } from '../src/export/defaults';
 
 describe('Phase 3b Export Enhancements', () => {
   class MockFileSystemWritableFileStream {}
@@ -481,6 +590,7 @@ describe('Phase 3b Export Enhancements', () => {
   describe('Output Target Selection', () => {
     it('creates disk target when showSaveFilePicker is present', async () => {
       const mockWritable = Object.create(MockFileSystemWritableFileStream.prototype);
+      mockWritable.write = vi.fn().mockResolvedValue(undefined);
       mockWritable.close = vi.fn().mockResolvedValue(undefined);
       mockWritable.abort = vi.fn().mockResolvedValue(undefined);
 
@@ -537,6 +647,7 @@ describe('Phase 3b Export Enhancements', () => {
 
     it('invokes target.abort() on export error in disk mode', async () => {
       const mockWritable = Object.create(MockFileSystemWritableFileStream.prototype);
+      mockWritable.write = vi.fn().mockResolvedValue(undefined);
       mockWritable.close = vi.fn().mockResolvedValue(undefined);
       mockWritable.abort = vi.fn().mockResolvedValue(undefined);
 
@@ -765,5 +876,25 @@ describe('Phase 3b Export Enhancements', () => {
       await yieldToEventLoop();
       expect(Date.now() - start).toBeGreaterThanOrEqual(0);
     });
+  });
+});
+
+describe('Phase 3c Fail Safe Disk Export Tests Standalone', () => {
+  it('supportsDiskExport is false when pointer is coarse even if showSaveFilePicker exists', () => {
+    (globalThis as any).window = {
+      showSaveFilePicker: vi.fn(),
+      matchMedia: (q: string) => ({ matches: q.includes('coarse') }),
+    };
+
+    expect(supportsDiskExport()).toBe(false);
+
+    (globalThis as any).window = {
+      showSaveFilePicker: vi.fn(),
+      matchMedia: (q: string) => ({ matches: false }),
+    };
+
+    expect(supportsDiskExport()).toBe(true);
+
+    delete (globalThis as any).window;
   });
 });
