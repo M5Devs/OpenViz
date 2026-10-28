@@ -1,3 +1,8 @@
+import { computeExportSize } from '../export/avc';
+import { parseAspect } from '../render/scene';
+import { createOutputTarget, getMemoryGuardThresholdBytes, OutputTarget } from '../export/target';
+import { acquireWakeLock } from '../export/wakelock';
+import { recommendExportSettings, estimateExportSizeBytes } from '../export/defaults';
 import { importAveeViz } from '../importer/avee';
 import { AudioEngine } from '../audio/engine';
 import { exportVideo } from '../export/webcodecs';
@@ -189,6 +194,73 @@ export class StudioController {
       });
     }
 
+    // Setup Export Options UI
+    const exportResolutionSelect = document.getElementById('exportResolutionSelect') as HTMLSelectElement | null;
+    const exportFpsSelect = document.getElementById('exportFpsSelect') as HTMLSelectElement | null;
+    const exportQualitySelect = document.getElementById('exportQualitySelect') as HTMLSelectElement | null;
+    const exportEstimateSize = document.getElementById('exportEstimateSize') as HTMLElement | null;
+    const exportOutputMode = document.getElementById('exportOutputMode') as HTMLElement | null;
+    const exportMemoryHint = document.getElementById('exportMemoryHint') as HTMLElement | null;
+
+    const deviceMemory = typeof navigator !== 'undefined' ? (navigator as any).deviceMemory : undefined;
+    const hardwareConcurrency = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency : undefined;
+    const coarsePointer =
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(pointer: coarse)').matches;
+
+    const recommended = recommendExportSettings({ deviceMemory, hardwareConcurrency, coarsePointer });
+
+    if (exportResolutionSelect) {
+      exportResolutionSelect.value = String(recommended.height);
+    }
+    if (exportFpsSelect) {
+      exportFpsSelect.value = String(recommended.fps);
+    }
+
+    const updateExportUI = () => {
+      const duration = this.audioEngine.getDuration() || 10;
+      const resHeight = parseInt(exportResolutionSelect?.value || '1080', 10);
+      const aspectVal = parseAspect((this.scene as any).template?.canvasAspect || '16:9');
+      const size = computeExportSize(resHeight, aspectVal);
+      const fps = parseInt(exportFpsSelect?.value || '60', 10);
+      const quality = (exportQualitySelect?.value || 'medium') as 'low' | 'medium' | 'high';
+
+      const estimatedBytes = estimateExportSizeBytes(
+        duration,
+        size.width,
+        size.height,
+        fps,
+        quality,
+        !!this.audioBuffer
+      );
+
+      if (exportEstimateSize) {
+        const mb = estimatedBytes / (1024 * 1024);
+        exportEstimateSize.textContent = mb >= 1000 ? `${(mb / 1024).toFixed(2)} GB` : `${mb.toFixed(1)} MB`;
+      }
+
+      const isDisk = typeof window !== 'undefined' && typeof (window as any).showSaveFilePicker === 'function';
+      if (exportOutputMode) {
+        exportOutputMode.textContent = isDisk ? 'Direct to disk' : 'In memory';
+        exportOutputMode.className = isDisk ? 'text-emerald-400 font-medium' : 'text-amber-400 font-medium';
+      }
+
+      if (exportMemoryHint) {
+        if (!isDisk && estimatedBytes > 0.6 * getMemoryGuardThresholdBytes()) {
+          exportMemoryHint.classList.remove('hidden');
+        } else {
+          exportMemoryHint.classList.add('hidden');
+        }
+      }
+    };
+
+    exportResolutionSelect?.addEventListener('change', updateExportUI);
+    exportFpsSelect?.addEventListener('change', updateExportUI);
+    exportQualitySelect?.addEventListener('change', updateExportUI);
+
+    updateExportUI();
+
     // Export Video
     const exportBtn = document.getElementById('exportBtn') as HTMLButtonElement | null;
     const cancelExportBtn = document.getElementById('cancelExportBtn') as HTMLButtonElement | null;
@@ -197,6 +269,46 @@ export class StudioController {
     if (exportBtn) {
       exportBtn.addEventListener('click', async () => {
         const duration = this.audioEngine.getDuration() || 10;
+        const resHeight = parseInt(exportResolutionSelect?.value || '1080', 10);
+        const aspectVal = parseAspect((this.scene as any).template?.canvasAspect || '16:9');
+        const size = computeExportSize(resHeight, aspectVal);
+        const fps = parseInt(exportFpsSelect?.value || '60', 10);
+        const quality = (exportQualitySelect?.value || 'medium') as 'low' | 'medium' | 'high';
+
+        const estimatedBytes = estimateExportSizeBytes(
+          duration,
+          size.width,
+          size.height,
+          fps,
+          quality,
+          !!this.audioBuffer
+        );
+
+        // Synchronously call createOutputTarget before any await to preserve user activation for showSaveFilePicker
+        const targetPromise = createOutputTarget({
+          suggestedName: 'openviz_render.mp4',
+          estimatedBytes,
+        });
+
+        let target: OutputTarget;
+        try {
+          target = await targetPromise;
+        } catch (err: any) {
+          if (err?.name === 'AbortError') {
+            const statusEl = document.getElementById('exportStatusMessage');
+            if (statusEl) {
+              statusEl.textContent = 'Export cancelled (file picker closed)';
+              statusEl.classList.remove('hidden');
+              setTimeout(() => statusEl.classList.add('hidden'), 3000);
+            }
+            return;
+          }
+          alert('Export target error: ' + (err as Error).message);
+          return;
+        }
+
+        const wakeLock = await acquireWakeLock();
+
         exportBtn.textContent = '0%';
         exportBtn.setAttribute('disabled', 'true');
         if (cancelExportBtn) {
@@ -204,6 +316,7 @@ export class StudioController {
         }
 
         exportAbortController = new AbortController();
+        const statusEl = document.getElementById('exportStatusMessage');
 
         try {
           const result = await exportVideo(
@@ -211,8 +324,17 @@ export class StudioController {
             this.audioBuffer,
             duration,
             {
-              height: 1080,
-              fps: 60,
+              width: size.width,
+              height: size.height,
+              fps,
+              quality,
+              target,
+              onVisibilityWarning: (msg) => {
+                if (statusEl) {
+                  statusEl.textContent = msg;
+                  statusEl.classList.remove('hidden');
+                }
+              },
             },
             (progress) => {
               exportBtn.textContent = `${progress.percent}%`;
@@ -220,16 +342,19 @@ export class StudioController {
             exportAbortController.signal
           );
 
-          const url = URL.createObjectURL(result.blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = 'openviz_render.mp4';
-          a.click();
-
-          setTimeout(() => URL.revokeObjectURL(url), 10_000);
+          if (result.blob) {
+            const url = URL.createObjectURL(result.blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'openviz_render.mp4';
+            a.click();
+            setTimeout(() => URL.revokeObjectURL(url), 10_000);
+          }
 
           const audioCodecStr = result.info.audioCodec ? result.info.audioCodec.toUpperCase() : 'NO AUDIO';
-          let statusMsg = `Exported ${result.info.width}x${result.info.height}@${result.info.fps} H.264 + ${audioCodecStr}`;
+          let statusMsg = result.blob
+            ? `Exported ${result.info.width}x${result.info.height}@${result.info.fps} H.264 + ${audioCodecStr}`
+            : `Saved to the file you chose (${result.info.width}x${result.info.height}@${result.info.fps} H.264 + ${audioCodecStr})`;
 
           const dsp = this.audioEngine.getDSPState();
           const dspActive = dsp.bassBoostDb > 0 || dsp.slowedReverb || dsp.nightcore || dsp.eightD;
@@ -250,6 +375,10 @@ export class StudioController {
             alert('Export failed: ' + (err as Error).message);
           }
         } finally {
+          await wakeLock.release();
+          if (statusEl) {
+            statusEl.classList.add('hidden');
+          }
           exportBtn.textContent = 'Export MP4';
           exportBtn.removeAttribute('disabled');
           if (cancelExportBtn) {

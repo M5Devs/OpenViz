@@ -461,3 +461,309 @@ describe('Mocked WebCodecs export integration tests', () => {
     }
   });
 });
+
+
+import { createOutputTarget, getMemoryGuardThresholdBytes } from '../src/export/target';
+import { acquireWakeLock } from '../src/export/wakelock';
+import { recommendExportSettings, yieldToEventLoop } from '../src/export/defaults';
+
+describe('Phase 3b Export Enhancements', () => {
+  class MockFileSystemWritableFileStream {}
+
+  beforeEach(() => {
+    (globalThis as any).FileSystemWritableFileStream = MockFileSystemWritableFileStream;
+  });
+
+  afterEach(() => {
+    delete (globalThis as any).FileSystemWritableFileStream;
+  });
+
+  describe('Output Target Selection', () => {
+    it('creates disk target when showSaveFilePicker is present', async () => {
+      const mockWritable = Object.create(MockFileSystemWritableFileStream.prototype);
+      mockWritable.close = vi.fn().mockResolvedValue(undefined);
+      mockWritable.abort = vi.fn().mockResolvedValue(undefined);
+
+      const mockHandle = {
+        createWritable: vi.fn().mockResolvedValue(mockWritable),
+      };
+      (globalThis as any).window = globalThis;
+      (globalThis as any).showSaveFilePicker = vi.fn().mockResolvedValue(mockHandle);
+
+      const target = await createOutputTarget({ suggestedName: 'test.mp4', estimatedBytes: 50 * 1024 * 1024 });
+      expect(target.kind).toBe('disk');
+      expect((globalThis as any).showSaveFilePicker).toHaveBeenCalledWith({
+        suggestedName: 'test.mp4',
+        types: [{ description: 'MP4 video', accept: { 'video/mp4': ['.mp4'] } }],
+      });
+
+      const blob = await target.finalize();
+      expect(blob).toBeNull();
+      expect(mockWritable.close).toHaveBeenCalledTimes(1);
+
+      delete (globalThis as any).showSaveFilePicker;
+    });
+
+    it('cancels quietly when showSaveFilePicker throws AbortError', async () => {
+      (globalThis as any).window = globalThis;
+      const abortErr = new DOMException('The user aborted a request.', 'AbortError');
+      (globalThis as any).showSaveFilePicker = vi.fn().mockRejectedValue(abortErr);
+
+      const mockScene = { beginExport: vi.fn(), endExport: vi.fn() } as any;
+
+      let pickerFailed = false;
+      try {
+        await createOutputTarget({ suggestedName: 'test.mp4', estimatedBytes: 50 * 1024 * 1024 });
+      } catch (e: any) {
+        pickerFailed = true;
+        expect(e.name).toBe('AbortError');
+      }
+
+      expect(pickerFailed).toBe(true);
+      expect(mockScene.beginExport).not.toHaveBeenCalled();
+
+      delete (globalThis as any).showSaveFilePicker;
+    });
+
+    it('creates memory target when showSaveFilePicker is absent', async () => {
+      delete (globalThis as any).showSaveFilePicker;
+
+      const target = await createOutputTarget({ suggestedName: 'test.mp4', estimatedBytes: 50 * 1024 * 1024 });
+      expect(target.kind).toBe('memory');
+
+      const blob = await target.finalize();
+      expect(blob).toBeInstanceOf(Blob);
+    });
+
+    it('invokes target.abort() on export error in disk mode', async () => {
+      const mockWritable = Object.create(MockFileSystemWritableFileStream.prototype);
+      mockWritable.close = vi.fn().mockResolvedValue(undefined);
+      mockWritable.abort = vi.fn().mockResolvedValue(undefined);
+
+      const mockHandle = {
+        createWritable: vi.fn().mockResolvedValue(mockWritable),
+      };
+      (globalThis as any).window = globalThis;
+      (globalThis as any).showSaveFilePicker = vi.fn().mockResolvedValue(mockHandle);
+
+      const target = await createOutputTarget({ suggestedName: 'test.mp4', estimatedBytes: 50 * 1024 * 1024 });
+      const mockScene = {
+        beginExport: vi.fn(),
+        endExport: vi.fn(),
+        renderer: { domElement: {} },
+        updateAudioReactivity: vi.fn(),
+        render: vi.fn(),
+      } as any;
+
+      (globalThis as any).VideoFrame = class MockVideoFrame { close() {} };
+      class FailingVideoEncoder {
+        public encodeQueueSize = 0;
+        public state = 'configured';
+        private callbacks: any;
+        constructor(callbacks: any) {
+          this.callbacks = callbacks;
+        }
+        static isConfigSupported = vi.fn().mockResolvedValue({ supported: true, hardwareAcceleration: 'prefer-hardware' });
+        configure() {}
+        encode() {
+          if (this.callbacks.error) {
+            this.callbacks.error(new Error('Hardware encoding failed'));
+          }
+        }
+        addEventListener() {}
+        removeEventListener() {}
+        async flush() {}
+        close() { this.state = 'closed'; }
+      }
+      (globalThis as any).VideoEncoder = FailingVideoEncoder;
+
+      try {
+        await exportVideo(mockScene, null, 1, { target });
+        expect.unreachable('Should have thrown error');
+      } catch (err: any) {
+        expect(err.message).toBe('Hardware encoding failed');
+      }
+
+      expect(mockWritable.abort).toHaveBeenCalledTimes(1);
+      delete (globalThis as any).showSaveFilePicker;
+    });
+  });
+
+  describe('Memory Guard Thresholds', () => {
+    it('uses 400 MB threshold when deviceMemory <= 4 or coarse pointer matches', () => {
+      Object.defineProperty(globalThis, 'navigator', {
+        value: { deviceMemory: 4 },
+        configurable: true,
+        writable: true,
+      });
+      expect(getMemoryGuardThresholdBytes()).toBe(400 * 1024 * 1024);
+
+      Object.defineProperty(globalThis, 'navigator', {
+        value: { deviceMemory: 2 },
+        configurable: true,
+        writable: true,
+      });
+      expect(getMemoryGuardThresholdBytes()).toBe(400 * 1024 * 1024);
+
+      Object.defineProperty(globalThis, 'navigator', {
+        value: { deviceMemory: 8 },
+        configurable: true,
+        writable: true,
+      });
+      (globalThis as any).window = {
+        matchMedia: (q: string) => ({ matches: q.includes('coarse') }),
+      };
+      expect(getMemoryGuardThresholdBytes()).toBe(400 * 1024 * 1024);
+    });
+
+    it('uses 1.5 GB threshold on standard desktop devices', () => {
+      Object.defineProperty(globalThis, 'navigator', {
+        value: { deviceMemory: 8 },
+        configurable: true,
+        writable: true,
+      });
+      (globalThis as any).window = {
+        matchMedia: () => ({ matches: false }),
+      };
+      expect(getMemoryGuardThresholdBytes()).toBe(1.5 * 1024 * 1024 * 1024);
+    });
+
+    it('throws memory guard error when exceeding threshold in memory mode', async () => {
+      delete (globalThis as any).showSaveFilePicker;
+      Object.defineProperty(globalThis, 'navigator', {
+        value: { deviceMemory: 4 },
+        configurable: true,
+        writable: true,
+      });
+
+      await expect(
+        createOutputTarget({ estimatedBytes: 450 * 1024 * 1024 })
+      ).rejects.toThrow(/exceeds the 400 MB in-memory limit/i);
+    });
+  });
+
+  describe('recommendExportSettings', () => {
+    it('recommends 720p30 for coarse pointer or low memory <= 4', () => {
+      expect(recommendExportSettings({ deviceMemory: 4, coarsePointer: false })).toEqual({
+        width: 1280,
+        height: 720,
+        fps: 30,
+        label: '720p30',
+      });
+
+      expect(recommendExportSettings({ deviceMemory: 16, coarsePointer: true })).toEqual({
+        width: 1280,
+        height: 720,
+        fps: 30,
+        label: '720p30',
+      });
+    });
+
+    it('recommends 1080p60 for deviceMemory >= 8 and non-coarse pointer', () => {
+      expect(recommendExportSettings({ deviceMemory: 8, coarsePointer: false })).toEqual({
+        width: 1920,
+        height: 1080,
+        fps: 60,
+        label: '1080p60',
+      });
+    });
+
+    it('recommends 1080p30 for mid-range desktop devices', () => {
+      expect(recommendExportSettings({ deviceMemory: 6, coarsePointer: false })).toEqual({
+        width: 1920,
+        height: 1080,
+        fps: 30,
+        label: '1080p30',
+      });
+
+      expect(recommendExportSettings({ coarsePointer: false })).toEqual({
+        width: 1920,
+        height: 1080,
+        fps: 30,
+        label: '1080p30',
+      });
+    });
+  });
+
+  describe('Wake Lock & API Safety', () => {
+    it('acquires wake lock and re-acquires on visibilitychange', async () => {
+      const mockSentinel = { release: vi.fn().mockResolvedValue(undefined) };
+      const requestFn = vi.fn().mockResolvedValue(mockSentinel);
+
+      Object.defineProperty(globalThis, 'navigator', {
+        value: { wakeLock: { request: requestFn } },
+        configurable: true,
+        writable: true,
+      });
+
+      const listeners: Record<string, Function> = {};
+      (globalThis as any).document = {
+        visibilityState: 'visible',
+        addEventListener: (evt: string, fn: Function) => {
+          listeners[evt] = fn;
+        },
+        removeEventListener: (evt: string, fn: Function) => {
+          delete listeners[evt];
+        },
+      };
+
+      const lock = await acquireWakeLock();
+      expect(requestFn).toHaveBeenCalledWith('screen');
+
+      if (listeners['visibilitychange']) {
+        await listeners['visibilitychange']();
+      }
+      expect(requestFn).toHaveBeenCalledTimes(2);
+
+      await lock.release();
+      expect(mockSentinel.release).toHaveBeenCalledTimes(1);
+      expect(listeners['visibilitychange']).toBeUndefined();
+    });
+
+    it('never throws when wakeLock is unsupported or rejects', async () => {
+      Object.defineProperty(globalThis, 'navigator', {
+        value: {},
+        configurable: true,
+        writable: true,
+      });
+      const lock = await acquireWakeLock();
+      await expect(lock.release()).resolves.not.toThrow();
+
+      Object.defineProperty(globalThis, 'navigator', {
+        value: { wakeLock: { request: vi.fn().mockRejectedValue(new Error('Low battery')) } },
+        configurable: true,
+        writable: true,
+      });
+      const lock2 = await acquireWakeLock();
+      await expect(lock2.release()).resolves.not.toThrow();
+    });
+  });
+
+  describe('yieldToEventLoop', () => {
+    it('uses MessageChannel when present', async () => {
+      let channelUsed = false;
+      class MockMessageChannel {
+        port1 = { onmessage: null as any };
+        port2 = {
+          postMessage: () => {
+            channelUsed = true;
+            if (this.port1.onmessage) this.port1.onmessage();
+          },
+        };
+      }
+      (globalThis as any).MessageChannel = MockMessageChannel;
+
+      await yieldToEventLoop();
+      expect(channelUsed).toBe(true);
+
+      delete (globalThis as any).MessageChannel;
+    });
+
+    it('falls back to setTimeout when MessageChannel is absent', async () => {
+      delete (globalThis as any).MessageChannel;
+      const start = Date.now();
+      await yieldToEventLoop();
+      expect(Date.now() - start).toBeGreaterThanOrEqual(0);
+    });
+  });
+});

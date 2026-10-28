@@ -30,6 +30,39 @@
           <input type="file" id="audioInput" accept="audio/*" class="hidden" />
         </label>
 
+        <div class="flex items-center gap-2 border-l border-white/10 pl-3 mr-2">
+          <div class="flex flex-col text-[10px]">
+            <label class="text-slate-400">Res</label>
+            <select id="exportResolutionSelect" class="bg-slate-800 text-slate-200 text-xs rounded border border-white/10 px-1 py-0.5 cursor-pointer">
+              <option value="720">720p</option>
+              <option value="1080">1080p</option>
+              <option value="1440">1440p</option>
+              <option value="2160">2160p</option>
+            </select>
+          </div>
+          <div class="flex flex-col text-[10px]">
+            <label class="text-slate-400">FPS</label>
+            <select id="exportFpsSelect" class="bg-slate-800 text-slate-200 text-xs rounded border border-white/10 px-1 py-0.5 cursor-pointer">
+              <option value="30">30</option>
+              <option value="60">60</option>
+            </select>
+          </div>
+          <div class="flex flex-col text-[10px]">
+            <label class="text-slate-400">Quality</label>
+            <select id="exportQualitySelect" class="bg-slate-800 text-slate-200 text-xs rounded border border-white/10 px-1 py-0.5 cursor-pointer">
+              <option value="low">Low</option>
+              <option value="medium" selected>Medium</option>
+              <option value="high">High</option>
+            </select>
+          </div>
+          <div class="flex flex-col text-[10px] pl-1">
+            <span class="text-slate-400">Est: <span id="exportEstimateSize" class="text-indigo-300 font-mono">--</span></span>
+            <span class="text-slate-400">Mode: <span id="exportOutputMode" class="text-emerald-400 font-medium">--</span></span>
+          </div>
+        </div>
+        <div id="exportMemoryHint" class="hidden px-2 py-1 bg-amber-500/20 border border-amber-500/40 text-amber-200 text-[11px] rounded">
+          Hint: High estimated size for in-memory export. Consider lowering resolution/fps/quality.
+        </div>
         <button id="exportBtn" class="px-4 py-1.5 text-xs font-semibold rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white transition shadow-lg shadow-indigo-600/30 flex items-center gap-1.5">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4 4m0 0l-4 4m4-4H3"></path></svg>
           Export MP4
@@ -93,6 +126,7 @@
 
       <!-- Center Panel: Canvas Viewport -->
       <main class="flex-1 bg-black relative flex items-center justify-center overflow-hidden">
+        <div id="exportStatusMessage" class="hidden absolute top-3 left-1/2 -translate-x-1/2 z-30 px-4 py-1.5 bg-amber-500/90 text-slate-950 font-semibold text-xs rounded-full shadow-lg border border-amber-300"></div>
         <canvas id="studioCanvas" class="w-full h-full object-contain cursor-crosshair"></canvas>
       </main>
 
