@@ -68,6 +68,20 @@ export class VisualizerScene {
   private selectedNodeId: string | null = null;
   private onSelectCallback: ((nodeId: string | null) => void) | null = null;
 
+  private exportSavedState: {
+    width: number;
+    height: number;
+    pixelRatio: number;
+    cameraLeft: number;
+    cameraRight: number;
+    cameraTop: number;
+    cameraBottom: number;
+    selectedNodeId: string | null;
+    transformControlsEnabled: boolean;
+    transformHelperVisible: boolean;
+    guideRectVisible: boolean;
+  } | null = null;
+
   private logicalAspect = 16 / 9;
   private dummyObj = new THREE.Object3D();
   private clearColorObj = new THREE.Color();
@@ -633,6 +647,54 @@ export class VisualizerScene {
 
     // Apply sceneShake to contentRoot
     this.contentRoot.position.set(totalSceneShakeX, totalSceneShakeY, 0);
+
+    this.render();
+  }
+
+  public beginExport(width: number, height: number) {
+    const containerWidth = this.container?.clientWidth || 1920;
+    const containerHeight = this.container?.clientHeight || 1080;
+    const helper = this.getTransformControlsHelper();
+
+    this.exportSavedState = {
+      width: containerWidth,
+      height: containerHeight,
+      pixelRatio: this.renderer.getPixelRatio(),
+      cameraLeft: this.camera.left,
+      cameraRight: this.camera.right,
+      cameraTop: this.camera.top,
+      cameraBottom: this.camera.bottom,
+      selectedNodeId: this.selectedNodeId,
+      transformControlsEnabled: this.transformControls ? this.transformControls.enabled : true,
+      transformHelperVisible: helper ? helper.visible : true,
+      guideRectVisible: this.guideRect.visible,
+    };
+
+    this.renderer.setPixelRatio(1);
+    this.setGizmoVisible(false);
+    this.resize(width, height);
+  }
+
+  public endExport() {
+    if (!this.exportSavedState) return;
+    const s = this.exportSavedState;
+    this.exportSavedState = null;
+
+    this.renderer.setPixelRatio(s.pixelRatio);
+    this.camera.left = s.cameraLeft;
+    this.camera.right = s.cameraRight;
+    this.camera.top = s.cameraTop;
+    this.camera.bottom = s.cameraBottom;
+    this.camera.updateProjectionMatrix();
+
+    this.renderer.setSize(s.width, s.height, false);
+
+    this.selectedNodeId = s.selectedNodeId;
+    this.setGizmoVisible(s.guideRectVisible);
+
+    if (s.guideRectVisible && s.selectedNodeId && this.nodeEntries.has(s.selectedNodeId)) {
+      this.transformControls?.attach(this.nodeEntries.get(s.selectedNodeId)!.baseGroup);
+    }
 
     this.render();
   }

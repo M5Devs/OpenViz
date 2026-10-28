@@ -190,33 +190,79 @@ export class StudioController {
     }
 
     // Export Video
-    const exportBtn = document.getElementById('exportBtn');
+    const exportBtn = document.getElementById('exportBtn') as HTMLButtonElement | null;
+    const cancelExportBtn = document.getElementById('cancelExportBtn') as HTMLButtonElement | null;
+    let exportAbortController: AbortController | null = null;
+
     if (exportBtn) {
       exportBtn.addEventListener('click', async () => {
         const duration = this.audioEngine.getDuration() || 10;
-        exportBtn.textContent = 'Encoding...';
+        exportBtn.textContent = '0%';
         exportBtn.setAttribute('disabled', 'true');
+        if (cancelExportBtn) {
+          cancelExportBtn.classList.remove('hidden');
+        }
+
+        exportAbortController = new AbortController();
 
         try {
-          const blob = await exportVideo(this.scene, this.audioBuffer, duration, {
-            width: 1920,
-            height: 1080,
-            fps: 60,
-            bitrate: 12_000_000,
-          });
+          const result = await exportVideo(
+            this.scene,
+            this.audioBuffer,
+            duration,
+            {
+              height: 1080,
+              fps: 60,
+            },
+            (progress) => {
+              exportBtn.textContent = `${progress.percent}%`;
+            },
+            exportAbortController.signal
+          );
 
-          const url = URL.createObjectURL(blob);
+          const url = URL.createObjectURL(result.blob);
           const a = document.createElement('a');
           a.href = url;
           a.download = 'openviz_render.mp4';
           a.click();
-        } catch (err) {
-          console.error('Export failed:', err);
-          alert('Export failed: ' + (err as Error).message);
+
+          setTimeout(() => URL.revokeObjectURL(url), 10_000);
+
+          const audioCodecStr = result.info.audioCodec ? result.info.audioCodec.toUpperCase() : 'NO AUDIO';
+          let statusMsg = `Exported ${result.info.width}x${result.info.height}@${result.info.fps} H.264 + ${audioCodecStr}`;
+
+          const dsp = this.audioEngine.getDSPState();
+          const dspActive = dsp.bassBoostDb > 0 || dsp.slowedReverb || dsp.nightcore || dsp.eightD;
+
+          if (result.info.audioCodec === null) {
+            statusMsg += ' (Warning: No audio was exported)';
+          }
+          if (dspActive) {
+            statusMsg += ' (Warning: Export contains the ORIGINAL audio; DSP effects are not applied yet)';
+          }
+
+          alert(statusMsg);
+        } catch (err: any) {
+          if (err?.name === 'AbortError') {
+            console.log('Export cancelled by user.');
+          } else {
+            console.error('Export failed:', err);
+            alert('Export failed: ' + (err as Error).message);
+          }
         } finally {
           exportBtn.textContent = 'Export MP4';
           exportBtn.removeAttribute('disabled');
+          if (cancelExportBtn) {
+            cancelExportBtn.classList.add('hidden');
+          }
+          exportAbortController = null;
         }
+      });
+    }
+
+    if (cancelExportBtn) {
+      cancelExportBtn.addEventListener('click', () => {
+        exportAbortController?.abort();
       });
     }
 
