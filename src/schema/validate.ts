@@ -55,6 +55,16 @@ export function validateTemplate(input: unknown): ValidationResult {
   }
 
   // name & author
+  // analysisMode
+  let analysisMode: 'openviz' | 'avee-classic' = 'openviz';
+  if (t.analysisMode !== undefined) {
+    if (t.analysisMode !== 'openviz' && t.analysisMode !== 'avee-classic') {
+      errors.push(`analysisMode must be 'openviz' or 'avee-classic', received '${t.analysisMode}'`);
+    } else {
+      analysisMode = t.analysisMode;
+    }
+  }
+
   const name = typeof t.name === 'string' ? t.name : 'Untitled';
   const author = typeof t.author === 'string' ? t.author : '';
   const canvasAspect = typeof t.canvasAspect === 'string' ? t.canvasAspect : '16:9';
@@ -279,6 +289,7 @@ export function validateTemplate(input: unknown): ValidationResult {
     ok: true,
     template: {
       schemaVersion: t.schemaVersion,
+      analysisMode,
       name,
       author,
       canvasAspect,

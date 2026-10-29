@@ -1,0 +1,9 @@
+OpenViz
+Copyright 2024 OpenViz Contributors
+
+Portions derived from Avee Open Player 1.0.34:
+- Source: https://github.com/Azy-Kun/AveeOpenPlayer_1.0.34
+- Commit: c909d8b50dcabb5d2b54dc1bfd72f9431cdd7af6
+- Copyright 2019 Avee Player
+- License: Apache License, Version 2.0 (see licenses/Apache-2.0.txt)
+- Modifications: Ported DSP windowing (hannWindow), A-weighting curve (myAWeight), frequency band generation, FFT bin accumulation, adaptive range normalisation, and smoothing logic from Java to TypeScript in src/audio/avee_classic.ts and adapted to OpenViz architecture.

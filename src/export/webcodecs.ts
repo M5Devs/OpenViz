@@ -1,7 +1,7 @@
 import { OutputTarget, createOutputTarget } from './target';
 import { yieldToEventLoop, estimateVideoBitrate } from './defaults';
 import * as Mp4Muxer from 'mp4-muxer';
-import { SpectrumAnalyzer } from '../audio/analysis';
+import { createAnalyzer } from '../audio/factory';
 import { parseAspect, VisualizerScene } from '../render/scene';
 import { FrequencyData } from '../types';
 import { computeExportSize, pickAvcLevel } from './avc';
@@ -379,12 +379,12 @@ export async function exportVideo(
     const fftSize = 4096;
     const analyzerSampleRate = audioBuffer ? audioBuffer.sampleRate : 44100;
     const monoPcm = audioBuffer ? downmixAudioBufferToMono(audioBuffer) : null;
-    const analyzer = new SpectrumAnalyzer({
-      sampleRate: analyzerSampleRate,
-      fftSize,
-      bands: 64,
-      frameRate: fps,
-    });
+    const templateMode = (scene as any)['template']?.analysisMode ?? 'openviz';
+    const analyzer = createAnalyzer(
+      templateMode,
+      analyzerSampleRate,
+      fps
+    );
 
     const frameSamples = new Float32Array(fftSize);
 

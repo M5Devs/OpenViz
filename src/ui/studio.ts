@@ -150,6 +150,9 @@ export class StudioController {
             this.template = JSON.parse(text);
           }
           this.scene.loadTemplate(this.template);
+          const sel = document.getElementById('analysisModeSelect') as HTMLSelectElement;
+          if (sel) sel.value = this.template.analysisMode || 'openviz';
+          this.audioEngine.setAnalysisMode(this.template.analysisMode || 'openviz');
           this.renderLayersList();
           this.renderInspector();
           this.showStatus('Template loaded successfully.');
@@ -225,6 +228,17 @@ export class StudioController {
           const targetTime = (parseFloat(scrubber.value) / 100) * duration;
           this.audioEngine.seek(targetTime);
         }
+      });
+    }
+
+    // Analysis Mode Dropdown
+    const analysisModeSelect = document.getElementById('analysisModeSelect') as HTMLSelectElement;
+    if (analysisModeSelect) {
+      analysisModeSelect.value = this.template.analysisMode || 'openviz';
+      analysisModeSelect.addEventListener('change', () => {
+        const mode = analysisModeSelect.value as 'openviz' | 'avee-classic';
+        this.template.analysisMode = mode;
+        this.audioEngine.setAnalysisMode(mode);
       });
     }
 
