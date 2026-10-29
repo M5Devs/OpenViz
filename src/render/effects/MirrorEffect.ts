@@ -1,3 +1,5 @@
+import * as THREE from 'three';
+
 export const MirrorShader = {
   uniforms: {
     tDiffuse: { value: null },

@@ -1,10 +1,12 @@
+import * as THREE from 'three';
+
 export const BlurShader = {
   uniforms: {
     tDiffuse: { value: null },
-    direction: { value: [1.0, 0.0] },
+    direction: { value: new THREE.Vector2(1.0, 0.0) },
     blurRadius: { value: 1.0 },
     blurMultiplier: { value: 1.0 },
-    texelSize: { value: [1 / 1920, 1 / 1080] },
+    texelSize: { value: new THREE.Vector2(1 / 1920, 1 / 1080) },
   },
   vertexShader: `
     varying vec2 vUv;

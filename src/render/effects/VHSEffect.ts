@@ -1,3 +1,5 @@
+import * as THREE from 'three';
+
 /**
  * VHS Analog CRT / Scanline Shader:
  * MIT License, Copyright (c) halvves (https://github.com/halvves/shader-vhs)

@@ -1,7 +1,10 @@
+import * as THREE from 'three';
+
 export type BlendModeType = 'Normal' | 'Additive' | 'Multiply' | 'Screen';
 
 export const BlendShader = {
   uniforms: {
+    tDiffuse: { value: null },
     tBase: { value: null },
     tBlend: { value: null },
     blendMode: { value: 0 },
@@ -15,6 +18,7 @@ export const BlendShader = {
     }
   `,
   fragmentShader: `
+    uniform sampler2D tDiffuse;
     uniform sampler2D tBase;
     uniform sampler2D tBlend;
     uniform int blendMode;
