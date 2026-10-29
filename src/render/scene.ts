@@ -1,9 +1,12 @@
 import * as THREE from 'three';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { Pass } from 'three/examples/jsm/postprocessing/Pass.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { AfterimagePass } from 'three/examples/jsm/postprocessing/AfterimagePass.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 
 import { FrequencyData, OpenVizNode, OpenVizTemplate } from '../types';
 import { computeAnimatedState } from './bindings';
@@ -11,8 +14,9 @@ import { detectTextDirection, FONT_STACK } from './text';
 
 import { RgbSplitShader } from './effects/RgbSplitEffect';
 import { BlurShader } from './effects/BlurEffect';
-import { MotionBlurShader } from './effects/MotionBlurEffect';
 import { MirrorShader } from './effects/MirrorEffect';
+import { VHSShader } from './effects/VHSEffect';
+import { FidelityFXCASShader } from './effects/FidelityFXCASEffect';
 
 export function parseAspect(aspectStr?: string): number {
   if (!aspectStr) return 16 / 9;
@@ -69,7 +73,8 @@ export class VisualizerScene {
   public renderer: THREE.WebGLRenderer;
   public composer: EffectComposer;
   private renderPass: RenderPass;
-  private activeShaderPasses: any[] = [];
+  private activeShaderPasses: Pass[] = [];
+  private blurPasses: { horizontal: ShaderPass; vertical: ShaderPass } | null = null;
   private transformControls: TransformControls | null = null;
   private raycaster = new THREE.Raycaster();
   private mouse = new THREE.Vector2();
@@ -165,11 +170,11 @@ export class VisualizerScene {
 
   private getTransformControlsHelper(): THREE.Object3D | null {
     if (!this.transformControls) return null;
-    const tc = this.transformControls as any;
+    const tc = this.transformControls as unknown as { getHelper?: () => THREE.Object3D };
     if (typeof tc.getHelper === 'function') {
       return tc.getHelper();
     }
-    return tc;
+    return this.transformControls as unknown as THREE.Object3D;
   }
 
   private setupPointerEvents() {
@@ -240,8 +245,9 @@ export class VisualizerScene {
   private setupPostProcessing() {
     this.composer.passes = [this.renderPass];
     this.activeShaderPasses = [];
+    this.blurPasses = null;
 
-    if (!this.template?.postEffects) return;
+    if (!this.template?.postEffects || this.template.postEffects.length === 0) return;
 
     const width = this.container?.clientWidth || 1920;
     const height = this.container?.clientHeight || 1080;
@@ -269,23 +275,32 @@ export class VisualizerScene {
         this.composer.addPass(bloomPass);
         this.activeShaderPasses.push(bloomPass);
       } else if (effect.type === 'Blur') {
-        const blurPass = new ShaderPass(BlurShader);
-        if (effect.blurRadius !== undefined || effect.radius !== undefined) {
-          blurPass.uniforms.blurRadius.value = effect.blurRadius ?? effect.radius ?? 1.0;
-        }
-        if (effect.blurMultiplier !== undefined || effect.amount !== undefined) {
-          blurPass.uniforms.blurMultiplier.value = effect.blurMultiplier ?? effect.amount ?? 1.0;
-        }
-        blurPass.uniforms.texelSize.value.set(1 / width, 1 / height);
-        this.composer.addPass(blurPass);
-        this.activeShaderPasses.push(blurPass);
+        const hPass = new ShaderPass(BlurShader);
+        const vPass = new ShaderPass(BlurShader);
+
+        hPass.uniforms.direction.value.set(1.0, 0.0);
+        vPass.uniforms.direction.value.set(0.0, 1.0);
+
+        const radius = effect.blurRadius ?? effect.radius ?? 1.0;
+        const mult = effect.blurMultiplier ?? effect.amount ?? 1.0;
+
+        hPass.uniforms.blurRadius.value = radius;
+        hPass.uniforms.blurMultiplier.value = mult;
+        hPass.uniforms.texelSize.value.set(1 / width, 1 / height);
+
+        vPass.uniforms.blurRadius.value = radius;
+        vPass.uniforms.blurMultiplier.value = mult;
+        vPass.uniforms.texelSize.value.set(1 / width, 1 / height);
+
+        this.composer.addPass(hPass);
+        this.composer.addPass(vPass);
+        this.activeShaderPasses.push(hPass, vPass);
+        this.blurPasses = { horizontal: hPass, vertical: vPass };
       } else if (effect.type === 'MotionBlur' || effect.type === 'MotionTrails') {
-        const mbPass = new ShaderPass(MotionBlurShader);
-        if (effect.decay !== undefined) {
-          mbPass.uniforms.decay.value = effect.decay;
-        }
-        this.composer.addPass(mbPass);
-        this.activeShaderPasses.push(mbPass);
+        const decay = effect.decay !== undefined ? effect.decay : 0.8;
+        const afterimagePass = new AfterimagePass(decay);
+        this.composer.addPass(afterimagePass);
+        this.activeShaderPasses.push(afterimagePass);
       } else if (effect.type === 'Mirror') {
         const mirrorPass = new ShaderPass(MirrorShader);
         let mode = 0;
@@ -294,7 +309,26 @@ export class VisualizerScene {
         mirrorPass.uniforms.mode.value = mode;
         this.composer.addPass(mirrorPass);
         this.activeShaderPasses.push(mirrorPass);
+      } else if (effect.type === 'VHS') {
+        const vhsPass = new ShaderPass(VHSShader);
+        if (effect.noiseAmount !== undefined) {
+          vhsPass.uniforms.noiseAmount.value = effect.noiseAmount;
+        }
+        this.composer.addPass(vhsPass);
+        this.activeShaderPasses.push(vhsPass);
+      } else if (effect.type === 'FidelityFXCAS') {
+        const casPass = new ShaderPass(FidelityFXCASShader);
+        if (effect.amount !== undefined) {
+          casPass.uniforms.sharpness.value = effect.amount;
+        }
+        this.composer.addPass(casPass);
+        this.activeShaderPasses.push(casPass);
       }
+    }
+
+    if (this.activeShaderPasses.length > 0) {
+      const outputPass = new OutputPass();
+      this.composer.addPass(outputPass);
     }
   }
 
@@ -505,7 +539,16 @@ export class VisualizerScene {
 
     const mesh = new THREE.Mesh(geom);
     mesh.renderOrder = renderOrder;
-    mesh.scale.set(360, 360, 1);
+
+    const isWallpaper = /(^|[\s_\-.])(background|wallpaper|bg)($|[\s_\-.])/i.test(node.name) || fit === 'cover';
+    let defaultW = 360;
+    let defaultH = 360;
+    if (isWallpaper) {
+      const canvasAspect = this.logicalAspect;
+      defaultH = 1080;
+      defaultW = 1080 * canvasAspect;
+    }
+    mesh.scale.set(defaultW, defaultH, 1);
 
     if (assetUrl) {
       const texture = new THREE.TextureLoader().load(assetUrl, (tex) => {
@@ -518,7 +561,7 @@ export class VisualizerScene {
           let baseW = 360;
           let baseH = 360;
 
-          if (fit === 'cover') {
+          if (isWallpaper) {
             const canvasAspect = this.logicalAspect;
             if (aspect >= canvasAspect) {
               baseH = 1080;
@@ -750,12 +793,13 @@ export class VisualizerScene {
     }
 
     for (const pass of this.activeShaderPasses) {
-      if (pass.uniforms) {
-        if (pass.uniforms.beatShake) {
-          pass.uniforms.beatShake.value = audio.beat || 0;
+      const shaderPass = pass as unknown as { uniforms?: Record<string, { value: any }> };
+      if (shaderPass.uniforms) {
+        if (shaderPass.uniforms.beatShake) {
+          shaderPass.uniforms.beatShake.value = audio.beat || 0;
         }
-        if (pass.uniforms.iTime) {
-          pass.uniforms.iTime.value = timeSeconds;
+        if (shaderPass.uniforms.iTime) {
+          shaderPass.uniforms.iTime.value = timeSeconds;
         }
       }
     }
@@ -838,6 +882,12 @@ export class VisualizerScene {
 
     this.renderer.setSize(width, height, false);
     this.composer.setSize(width, height);
+
+    if (this.blurPasses) {
+      this.blurPasses.horizontal.uniforms.texelSize.value.set(1 / width, 1 / height);
+      this.blurPasses.vertical.uniforms.texelSize.value.set(1 / width, 1 / height);
+    }
+
     this.render();
   }
 
@@ -859,8 +909,8 @@ export class VisualizerScene {
     this.scene.remove(this.guideRect);
     disposeObject3D(this.guideRect);
 
-    if (this.composer && typeof (this.composer as any).dispose === 'function') {
-      (this.composer as any).dispose();
+    if (this.composer && typeof this.composer.dispose === 'function') {
+      this.composer.dispose();
     }
 
     this.renderer.dispose();

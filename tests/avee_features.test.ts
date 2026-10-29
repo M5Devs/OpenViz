@@ -4,7 +4,7 @@ import { expandTextTags, formatTimeMMSS } from '../src/render/text';
 import { sampleShapePath } from '../src/render/shapePaths';
 import { computeMeasureEnvelope } from '../src/render/bindings';
 
-describe('Avee Player Feature Parity Unit Tests', () => {
+describe('Audio Reactivity & DSP Engine Tests', () => {
   describe('Phase 1: Audio DSP & Reactivity', () => {
     it('logSpace maps logarithmic frequency distribution correctly', () => {
       const minFreq = 30;

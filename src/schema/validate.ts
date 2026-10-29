@@ -22,7 +22,16 @@ const KNOWN_BINDING_TARGETS: Set<BindingTarget> = new Set([
   'CameraShakeIntensity',
   'Position',
 ]);
-const KNOWN_POST_EFFECT_TYPES = new Set(['ChromaticAberration', 'MotionTrails', 'Bloom']);
+const KNOWN_POST_EFFECT_TYPES = new Set([
+  'ChromaticAberration',
+  'MotionTrails',
+  'Bloom',
+  'Blur',
+  'MotionBlur',
+  'Mirror',
+  'VHS',
+  'FidelityFXCAS',
+]);
 
 export function isValidAssetUrl(url: string): boolean {
   if (typeof url !== 'string' || !url) return false;
