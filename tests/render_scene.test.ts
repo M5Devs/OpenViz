@@ -41,6 +41,17 @@ vi.mock('three', async () => {
     setClearColor = vi.fn();
     render = vi.fn();
     dispose = vi.fn();
+    getPixelRatio = vi.fn().mockReturnValue(1);
+    getSize = vi.fn((target: THREE.Vector2) => (target ? target.set(1000, 1000) : new actual.Vector2(1000, 1000)));
+    getDrawingBufferSize = vi.fn((target: THREE.Vector2) => (target ? target.set(1000, 1000) : new actual.Vector2(1000, 1000)));
+    setRenderTarget = vi.fn();
+    getRenderTarget = vi.fn().mockReturnValue(null);
+    clear = vi.fn();
+    capabilities = { isWebGL2: true };
+    getContext = vi.fn().mockReturnValue({
+      getExtension: vi.fn(),
+      getParameter: vi.fn().mockReturnValue(16),
+    });
   }
 
   return {

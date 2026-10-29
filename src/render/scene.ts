@@ -1,8 +1,18 @@
 import * as THREE from 'three';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+
 import { FrequencyData, OpenVizNode, OpenVizTemplate } from '../types';
 import { computeAnimatedState } from './bindings';
 import { detectTextDirection, FONT_STACK } from './text';
+
+import { RgbSplitShader } from './effects/RgbSplitEffect';
+import { BlurShader } from './effects/BlurEffect';
+import { MotionBlurShader } from './effects/MotionBlurEffect';
+import { MirrorShader } from './effects/MirrorEffect';
 
 export function parseAspect(aspectStr?: string): number {
   if (!aspectStr) return 16 / 9;
@@ -57,6 +67,9 @@ export class VisualizerScene {
   private scene: THREE.Scene;
   private camera: THREE.OrthographicCamera;
   public renderer: THREE.WebGLRenderer;
+  public composer: EffectComposer;
+  private renderPass: RenderPass;
+  private activeShaderPasses: any[] = [];
   private transformControls: TransformControls | null = null;
   private raycaster = new THREE.Raycaster();
   private mouse = new THREE.Vector2();
@@ -104,6 +117,10 @@ export class VisualizerScene {
       this.renderer.setSize(container.clientWidth || 1920, container.clientHeight || 1080, false);
       container.appendChild(this.renderer.domElement);
     }
+
+    this.composer = new EffectComposer(this.renderer);
+    this.renderPass = new RenderPass(this.scene, this.camera);
+    this.composer.addPass(this.renderPass);
 
     this.contentRoot = new THREE.Group();
     this.scene.add(this.contentRoot);
@@ -220,6 +237,67 @@ export class VisualizerScene {
     this.guideRect.visible = visible;
   }
 
+  private setupPostProcessing() {
+    this.composer.passes = [this.renderPass];
+    this.activeShaderPasses = [];
+
+    if (!this.template?.postEffects) return;
+
+    const width = this.container?.clientWidth || 1920;
+    const height = this.container?.clientHeight || 1080;
+
+    for (const effect of this.template.postEffects) {
+      if (effect.type === 'ChromaticAberration') {
+        const pass = new ShaderPass(RgbSplitShader);
+        if (effect.amount !== undefined) {
+          pass.uniforms.amount.value = effect.amount;
+          pass.uniforms.u_redOffset.value.set(effect.amount, 0);
+          pass.uniforms.u_blueOffset.value.set(-effect.amount, 0);
+        }
+        if (effect.angle !== undefined) {
+          pass.uniforms.angle.value = effect.angle;
+        }
+        this.composer.addPass(pass);
+        this.activeShaderPasses.push(pass);
+      } else if (effect.type === 'Bloom') {
+        const bloomPass = new UnrealBloomPass(
+          new THREE.Vector2(width, height),
+          effect.intensity ?? effect.amount ?? 1.0,
+          effect.radius ?? 0.4,
+          effect.threshold ?? 0.8
+        );
+        this.composer.addPass(bloomPass);
+        this.activeShaderPasses.push(bloomPass);
+      } else if (effect.type === 'Blur') {
+        const blurPass = new ShaderPass(BlurShader);
+        if (effect.blurRadius !== undefined || effect.radius !== undefined) {
+          blurPass.uniforms.blurRadius.value = effect.blurRadius ?? effect.radius ?? 1.0;
+        }
+        if (effect.blurMultiplier !== undefined || effect.amount !== undefined) {
+          blurPass.uniforms.blurMultiplier.value = effect.blurMultiplier ?? effect.amount ?? 1.0;
+        }
+        blurPass.uniforms.texelSize.value.set(1 / width, 1 / height);
+        this.composer.addPass(blurPass);
+        this.activeShaderPasses.push(blurPass);
+      } else if (effect.type === 'MotionBlur' || effect.type === 'MotionTrails') {
+        const mbPass = new ShaderPass(MotionBlurShader);
+        if (effect.decay !== undefined) {
+          mbPass.uniforms.decay.value = effect.decay;
+        }
+        this.composer.addPass(mbPass);
+        this.activeShaderPasses.push(mbPass);
+      } else if (effect.type === 'Mirror') {
+        const mirrorPass = new ShaderPass(MirrorShader);
+        let mode = 0;
+        if (effect.mirrorMode === 'Vertical') mode = 1;
+        else if (effect.mirrorMode === 'Both') mode = 2;
+        mirrorPass.uniforms.mode.value = mode;
+        this.composer.addPass(mirrorPass);
+        this.activeShaderPasses.push(mirrorPass);
+      }
+    }
+  }
+
   public loadTemplate(template: OpenVizTemplate) {
     this.template = template;
     this.logicalAspect = parseAspect(template.canvasAspect);
@@ -254,6 +332,8 @@ export class VisualizerScene {
     for (let i = 0; i < template.nodes.length; i++) {
       this.buildAndAddNode(template.nodes[i], i);
     }
+
+    this.setupPostProcessing();
 
     this.resize(this.container?.clientWidth || 1920, this.container?.clientHeight || 1080);
     this.render();
@@ -669,6 +749,17 @@ export class VisualizerScene {
       }
     }
 
+    for (const pass of this.activeShaderPasses) {
+      if (pass.uniforms) {
+        if (pass.uniforms.beatShake) {
+          pass.uniforms.beatShake.value = audio.beat || 0;
+        }
+        if (pass.uniforms.iTime) {
+          pass.uniforms.iTime.value = timeSeconds;
+        }
+      }
+    }
+
     this.contentRoot.position.set(totalSceneShakeX, totalSceneShakeY, 0);
 
     this.render();
@@ -746,11 +837,16 @@ export class VisualizerScene {
     this.camera.updateProjectionMatrix();
 
     this.renderer.setSize(width, height, false);
+    this.composer.setSize(width, height);
     this.render();
   }
 
   public render() {
-    this.renderer.render(this.scene, this.camera);
+    if (this.composer && this.composer.passes.length > 1) {
+      this.composer.render();
+    } else {
+      this.renderer.render(this.scene, this.camera);
+    }
   }
 
   public dispose() {
@@ -762,6 +858,10 @@ export class VisualizerScene {
 
     this.scene.remove(this.guideRect);
     disposeObject3D(this.guideRect);
+
+    if (this.composer && typeof (this.composer as any).dispose === 'function') {
+      (this.composer as any).dispose();
+    }
 
     this.renderer.dispose();
     this.transformControls?.dispose();

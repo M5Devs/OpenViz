@@ -1,3 +1,5 @@
+import * as THREE from 'three';
+
 /**
  * AMD FidelityFX Contrast Adaptive Sharpening (CAS) WebGL Port:
  * MIT License, Copyright (c) Advanced Micro Devices, Inc.
@@ -23,7 +25,6 @@ export const FidelityFXCASShader = {
 
     void main() {
       vec4 col = texture2D(tDiffuse, vUv);
-      // Basic CAS contrast sharpening simulation
       vec4 left = texture2D(tDiffuse, vUv + vec2(-0.001, 0.0));
       vec4 right = texture2D(tDiffuse, vUv + vec2(0.001, 0.0));
       vec4 top = texture2D(tDiffuse, vUv + vec2(0.0, 0.001));
