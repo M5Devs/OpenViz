@@ -1093,6 +1093,24 @@ export class StudioController {
       this.template.postEffects.push(ca);
     }
 
+    let blur = this.template.postEffects.find((p) => p.type === 'Blur');
+    if (!blur) {
+      blur = { type: 'Blur', blurRadius: 1.0, blurMultiplier: 1.0 };
+      this.template.postEffects.push(blur);
+    }
+
+    let motionBlur = this.template.postEffects.find((p) => p.type === 'MotionBlur');
+    if (!motionBlur) {
+      motionBlur = { type: 'MotionBlur', decay: 0.8 };
+      this.template.postEffects.push(motionBlur);
+    }
+
+    let mirror = this.template.postEffects.find((p) => p.type === 'Mirror');
+    if (!mirror) {
+      mirror = { type: 'Mirror', mirrorMode: 'Horizontal' };
+      this.template.postEffects.push(mirror);
+    }
+
     const bloomThreshDisplay = el('span', { className: 'text-indigo-400 font-mono text-[11px]' }, `${bloom.threshold ?? 0.5}`);
     const bloomThreshSlider = el('input', {
       type: 'range',
@@ -1138,8 +1156,73 @@ export class StudioController {
       }
     });
 
+    const blurRadDisplay = el('span', { className: 'text-indigo-400 font-mono text-[11px]' }, `${blur.blurRadius ?? 1.0}`);
+    const blurRadSlider = el('input', {
+      type: 'range',
+      min: '0',
+      max: '10',
+      step: '0.5',
+      value: blur.blurRadius ?? 1.0,
+      className: 'w-full accent-indigo-500 cursor-pointer h-1 bg-slate-700 rounded appearance-none',
+      oninput: (e: Event) => {
+        const val = parseFloat((e.target as HTMLInputElement).value) || 0;
+        blur!.blurRadius = val;
+        blurRadDisplay.textContent = `${val}`;
+      }
+    });
+
+    const motionBlurDecayDisplay = el('span', { className: 'text-indigo-400 font-mono text-[11px]' }, `${motionBlur.decay ?? 0.8}`);
+    const motionBlurDecaySlider = el('input', {
+      type: 'range',
+      min: '0',
+      max: '0.95',
+      step: '0.05',
+      value: motionBlur.decay ?? 0.8,
+      className: 'w-full accent-indigo-500 cursor-pointer h-1 bg-slate-700 rounded appearance-none',
+      oninput: (e: Event) => {
+        const val = parseFloat((e.target as HTMLInputElement).value) || 0;
+        motionBlur!.decay = val;
+        motionBlurDecayDisplay.textContent = `${val}`;
+      }
+    });
+
+    const mirrorSelect = el('select', {
+      className: 'w-full glass-input p-1.5 rounded text-xs text-slate-200 bg-slate-800',
+      onchange: (e: Event) => {
+        mirror!.mirrorMode = (e.target as HTMLSelectElement).value as any;
+      }
+    },
+      el('option', { value: 'Horizontal', selected: (mirror.mirrorMode || 'Horizontal') === 'Horizontal' }, 'Horizontal'),
+      el('option', { value: 'Vertical', selected: mirror.mirrorMode === 'Vertical' }, 'Vertical'),
+      el('option', { value: 'Both', selected: mirror.mirrorMode === 'Both' }, 'Both')
+    );
+
     return el('div', { className: 'space-y-3' },
       el('h3', { className: 'font-semibold text-slate-300 uppercase text-[10px] tracking-wider' }, 'Global Post-Effects'),
+      el('div', { className: 'bg-white/5 p-2.5 rounded-lg border border-white/5 space-y-2' },
+        el('span', { className: 'text-xs font-semibold text-slate-200 block' }, 'Gaussian Blur'),
+        el('div', null,
+          el('div', { className: 'flex justify-between items-center mb-1 text-[11px]' },
+            el('label', { className: 'text-slate-400' }, 'Radius'),
+            blurRadDisplay
+          ),
+          blurRadSlider
+        )
+      ),
+      el('div', { className: 'bg-white/5 p-2.5 rounded-lg border border-white/5 space-y-2' },
+        el('span', { className: 'text-xs font-semibold text-slate-200 block' }, 'Motion Blur'),
+        el('div', null,
+          el('div', { className: 'flex justify-between items-center mb-1 text-[11px]' },
+            el('label', { className: 'text-slate-400' }, 'Decay'),
+            motionBlurDecayDisplay
+          ),
+          motionBlurDecaySlider
+        )
+      ),
+      el('div', { className: 'bg-white/5 p-2.5 rounded-lg border border-white/5 space-y-2' },
+        el('span', { className: 'text-xs font-semibold text-slate-200 block' }, 'Mirror Effect'),
+        mirrorSelect
+      ),
       el('div', { className: 'bg-white/5 p-2.5 rounded-lg border border-white/5 space-y-2' },
         el('span', { className: 'text-xs font-semibold text-slate-200 block' }, 'Bloom'),
         el('div', null,
@@ -1170,7 +1253,7 @@ export class StudioController {
     );
   }
 
-private startRenderLoop() {
+  private startRenderLoop() {
     const loop = () => {
       const audioData = this.audioEngine.getFrequencyData();
       const timeSeconds = this.audioEngine.getCurrentTime();
