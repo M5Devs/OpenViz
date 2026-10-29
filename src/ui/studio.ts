@@ -9,7 +9,7 @@ import { importAveeViz } from '../importer/avee';
 import { AudioEngine } from '../audio/engine';
 import { exportVideo } from '../export/webcodecs';
 import { VisualizerScene } from '../render/scene';
-import { OpenVizNode, OpenVizTemplate } from '../types';
+import { OpenVizNode, OpenVizTemplate, PostEffect } from '../types';
 import { el } from './dom';
 import { ObjectUrlRegistry } from '../assets/registry';
 import { isValidAssetUrl } from '../schema/validate';
@@ -22,7 +22,7 @@ export function rgbaToHex(rgba: [number, number, number, number]): string {
 }
 
 export function hexToRgba(hex: string, currentAlpha = 1.0): [number, number, number, number] {
-  let clean = hex.trim().replace(/^#/, '');
+  const clean = hex.trim().replace(/^#/, '');
   if (clean.length === 6) {
     const r = parseInt(clean.substring(0, 2), 16) / 255;
     const g = parseInt(clean.substring(2, 4), 16) / 255;
@@ -69,31 +69,31 @@ export class StudioController {
       name: 'Default Cyberpunk Template',
       author: 'OpenViz',
       canvasAspect: '16:9',
-      clearColor: [0.05, 0.05, 0.08, 1],
-      postEffects: [],
+      clearColor: [0.03, 0.03, 0.06, 1],
+      postEffects: [], // يبدأ نقي ومفيهوش تشويش ولا مراية مقلوبة!
       nodes: [
         {
           id: 'bg_1',
           name: 'Background Art',
           type: 'Image',
           transform: { position: [0, 0], scale: [1, 1], rotation: 0, opacity: 1 },
-          bindings: [{ source: 'Bass', target: 'ScaleUniform', outputRange: [1.0, 1.05] }],
+          bindings: [{ source: 'Bass', target: 'ScaleUniform', outputRange: [1.0, 1.03] }],
           imageData: {
             assetId: 'default_bg',
-            url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGPg5RUBAABZAC9GJy+hAAAAAElFTkSuQmCC',
+            url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQD3AAMqAAAAAElFTkSuQmCC',
             fit: 'cover',
           },
         },
         {
           id: 'bars_1',
-          name: 'Radial Spectrum',
+          name: 'Radial Spectrum Ring',
           type: 'Bars',
           transform: { position: [0, 0], scale: [1, 1], rotation: 0, opacity: 1 },
-          bindings: [{ source: 'Bass', target: 'ScaleUniform', outputRange: [1.0, 1.15] }],
+          bindings: [{ source: 'Bass', target: 'BarHeight', outputRange: [0.05, 0.4] }],
           barsData: {
             count: 64,
-            innerRadius: 240,
-            width: 4,
+            innerRadius: 320, // حجم فخم ومالي الشاشة
+            width: 5,
             isRadial: true,
             colorStart: [0, 0.94, 1, 1],
             colorEnd: [1, 0, 0.63, 1],
@@ -104,10 +104,10 @@ export class StudioController {
           name: 'Track Title',
           type: 'Text',
           transform: { position: [0, -380], scale: [1, 1], rotation: 0, opacity: 1 },
-          bindings: [{ source: 'Beat', target: 'ScaleUniform', outputRange: [1.0, 1.08] }],
+          bindings: [{ source: 'Beat', target: 'ScaleUniform', outputRange: [1.0, 1.05] }],
           textData: {
-            text: 'CYBERPUNK VISUALS - OPENVIZ 2.0',
-            size: 28,
+            text: 'OPENVIZ 2.0 STUDIO',
+            size: 32,
           },
         },
       ],
@@ -158,6 +158,7 @@ export class StudioController {
         }
       });
     }
+
     // Save .ovz Project Bundle
     const saveOvzBtn = document.getElementById('saveOvzBtn');
     if (saveOvzBtn) {
@@ -170,9 +171,7 @@ export class StudioController {
       });
     }
 
-
-
-    // Visualizer Preset Selection
+    // Preset Selection
     const presetSelect = document.getElementById('presetSelect') as HTMLSelectElement | null;
     if (presetSelect) {
       presetSelect.addEventListener('change', () => {
@@ -269,7 +268,7 @@ export class StudioController {
       });
     }
 
-    // Setup Export Options UI
+    // Setup Export UI
     const exportResolutionSelect = document.getElementById('exportResolutionSelect') as HTMLSelectElement | null;
     const exportFpsSelect = document.getElementById('exportFpsSelect') as HTMLSelectElement | null;
     const exportQualitySelect = document.getElementById('exportQualitySelect') as HTMLSelectElement | null;
@@ -286,12 +285,8 @@ export class StudioController {
 
     const recommended = recommendExportSettings({ deviceMemory, hardwareConcurrency, coarsePointer });
 
-    if (exportResolutionSelect) {
-      exportResolutionSelect.value = String(recommended.height);
-    }
-    if (exportFpsSelect) {
-      exportFpsSelect.value = String(recommended.fps);
-    }
+    if (exportResolutionSelect) exportResolutionSelect.value = String(recommended.height);
+    if (exportFpsSelect) exportFpsSelect.value = String(recommended.fps);
 
     const updateExportUI = () => {
       const duration = this.audioEngine.getDuration() || 10;
@@ -333,7 +328,6 @@ export class StudioController {
     exportResolutionSelect?.addEventListener('change', updateExportUI);
     exportFpsSelect?.addEventListener('change', updateExportUI);
     exportQualitySelect?.addEventListener('change', updateExportUI);
-
     updateExportUI();
 
     // Export Video
@@ -359,24 +353,14 @@ export class StudioController {
           !!this.audioBuffer
         );
 
-        const targetPromise = createOutputTarget({
-          suggestedName: 'openviz_render.mp4',
-          estimatedBytes,
-        });
-
         let target: OutputTarget;
         try {
-          target = await targetPromise;
+          target = await createOutputTarget({
+            suggestedName: 'openviz_render.mp4',
+            estimatedBytes,
+          });
         } catch (err: any) {
-          if (err?.name === 'AbortError') {
-            const statusEl = document.getElementById('exportStatusMessage');
-            if (statusEl) {
-              statusEl.textContent = 'Export cancelled (file picker closed)';
-              statusEl.classList.remove('hidden');
-              setTimeout(() => statusEl.classList.add('hidden'), 3000);
-            }
-            return;
-          }
+          if (err?.name === 'AbortError') return;
           this.showStatus('Export target error: ' + (err as Error).message, true);
           return;
         }
@@ -385,9 +369,7 @@ export class StudioController {
 
         exportBtn.textContent = '0%';
         exportBtn.setAttribute('disabled', 'true');
-        if (cancelExportBtn) {
-          cancelExportBtn.classList.remove('hidden');
-        }
+        cancelExportBtn?.classList.remove('hidden');
 
         exportAbortController = new AbortController();
         const statusEl = document.getElementById('exportStatusMessage');
@@ -426,61 +408,38 @@ export class StudioController {
           }
 
           const audioCodecStr = result.info.audioCodec ? result.info.audioCodec.toUpperCase() : 'NO AUDIO';
-          let statusMsg = result.blob
-            ? `Exported ${result.info.width}x${result.info.height}@${result.info.fps} H.264 + ${audioCodecStr}`
-            : `Saved to the file you chose (${result.info.width}x${result.info.height}@${result.info.fps} H.264 + ${audioCodecStr})`;
-
-          const dsp = this.audioEngine.getDSPState();
-          const dspActive = dsp.bassBoostDb > 0 || dsp.slowedReverb || dsp.nightcore || dsp.eightD;
-
-          if (result.info.audioCodec === null) {
-            statusMsg += ' (Warning: No audio was exported)';
-          }
-          if (dspActive) {
-            statusMsg += ' (Warning: Export contains the ORIGINAL audio; DSP effects are not applied yet)';
-          }
-
-          this.showStatus(statusMsg);
+          this.showStatus(`Exported ${result.info.width}x${result.info.height}@${result.info.fps} H.264 + ${audioCodecStr}`);
         } catch (err: any) {
-          if (err?.name === 'AbortError') {
-            console.log('Export cancelled by user.');
-          } else {
-            console.error('Export failed:', err?.name, err?.message, err?.stack);
-            this.showStatus(`Export failed: ${err?.name ?? 'Error'}: ${err?.message ?? String(err)}`, true);
+          if (err?.name !== 'AbortError') {
+            this.showStatus(`Export failed: ${err?.message ?? String(err)}`, true);
           }
         } finally {
           await wakeLock.release();
-          if (statusEl) {
-            statusEl.classList.add('hidden');
-          }
+          statusEl?.classList.add('hidden');
           exportBtn.textContent = 'Export MP4';
           exportBtn.removeAttribute('disabled');
-          if (cancelExportBtn) {
-            cancelExportBtn.classList.add('hidden');
-          }
+          cancelExportBtn?.classList.add('hidden');
           exportAbortController = null;
         }
       });
     }
 
-    if (cancelExportBtn) {
-      cancelExportBtn.addEventListener('click', () => {
-        exportAbortController?.abort();
-      });
-    }
+    cancelExportBtn?.addEventListener('click', () => {
+      exportAbortController?.abort();
+    });
 
-    // Add Spectrum Bars Button
+    // Add Bars Button
     document.getElementById('addBarsBtn')?.addEventListener('click', () => {
       const newNode: OpenVizNode = {
         id: `bars_${Date.now()}`,
-        name: 'Spectrum Bars',
+        name: 'Radial Spectrum',
         type: 'Bars',
         transform: { position: [0, 0], scale: [1, 1], rotation: 0, opacity: 1 },
-        bindings: [{ source: 'Bass', target: 'ScaleUniform', outputRange: [1, 1.2] }],
+        bindings: [{ source: 'Bass', target: 'BarHeight', outputRange: [0.05, 0.4] }],
         barsData: {
           count: 64,
-          innerRadius: 240,
-          width: 4,
+          innerRadius: 320,
+          width: 5,
           isRadial: true,
           colorStart: [0, 0.94, 1, 1],
           colorEnd: [1, 0, 0.63, 1],
@@ -491,7 +450,7 @@ export class StudioController {
       this.renderLayersList();
     });
 
-    // Add Image Button & Hidden File Input
+    // Add Image Button
     const addImageBtn = document.getElementById('addImageBtn');
     let imageInput = document.getElementById('imagePickerInput') as HTMLInputElement | null;
     if (!imageInput && typeof document !== 'undefined') {
@@ -511,11 +470,6 @@ export class StudioController {
         if (!file) return;
 
         const url = this.assetRegistry.create(file);
-        if (!isValidAssetUrl(url)) {
-          this.showStatus('Invalid image URL created', true);
-          return;
-        }
-
         const newNode: OpenVizNode = {
           id: `image_${Date.now()}`,
           name: file.name.replace(/\.[^/.]+$/, '') || 'New Image',
@@ -544,7 +498,7 @@ export class StudioController {
         transform: { position: [0, 0], scale: [1, 1], rotation: 0, opacity: 1 },
         bindings: [],
         textData: {
-          text: 'Text',
+          text: 'OpenViz Studio',
           size: 28,
         },
       };
@@ -607,28 +561,6 @@ export class StudioController {
         }
       }, '📄');
 
-      const upBtn = el('button', {
-        className: `p-1 hover:bg-white/20 rounded ${index === 0 ? 'opacity-30 cursor-not-allowed' : 'text-slate-300'}`,
-        title: 'Move Up',
-        onclick: (e: MouseEvent) => {
-          e.stopPropagation();
-          if (index > 0) {
-            this.reorderNode(index, index - 1);
-          }
-        }
-      }, '🔼');
-
-      const downBtn = el('button', {
-        className: `p-1 hover:bg-white/20 rounded ${index === nodes.length - 1 ? 'opacity-30 cursor-not-allowed' : 'text-slate-300'}`,
-        title: 'Move Down',
-        onclick: (e: MouseEvent) => {
-          e.stopPropagation();
-          if (index < nodes.length - 1) {
-            this.reorderNode(index, index + 1);
-          }
-        }
-      }, '🔽');
-
       const delBtn = el('button', {
         className: 'p-1 hover:bg-rose-500/30 rounded text-rose-400',
         title: 'Delete Layer',
@@ -638,7 +570,7 @@ export class StudioController {
         }
       }, '🗑️');
 
-      const actionsDiv = el('div', { className: 'flex items-center gap-0.5 text-[10px]' }, visBtn, dupBtn, upBtn, downBtn, delBtn);
+      const actionsDiv = el('div', { className: 'flex items-center gap-0.5 text-[10px]' }, visBtn, dupBtn, delBtn);
 
       const item = el(
         'div',
@@ -679,18 +611,7 @@ export class StudioController {
     this.renderInspector();
   }
 
-  private reorderNode(fromIdx: number, toIdx: number) {
-    if (fromIdx < 0 || fromIdx >= this.template.nodes.length || toIdx < 0 || toIdx >= this.template.nodes.length) return;
-    const [moved] = this.template.nodes.splice(fromIdx, 1);
-    this.template.nodes.splice(toIdx, 0, moved);
-    this.scene.loadTemplate(this.template);
-    if (this.selectedNodeId) {
-      this.scene.selectNode(this.selectedNodeId);
-    }
-    this.renderLayersList();
-  }
-
-    private renderInspector() {
+  private renderInspector() {
     const inspectorContent = document.getElementById('inspectorContent');
     if (!inspectorContent) return;
 
@@ -705,9 +626,7 @@ export class StudioController {
 
     const node = this.template.nodes.find((n) => n.id === this.selectedNodeId);
     if (!node) {
-      inspectorContent.replaceChildren(
-        el('p', { className: 'text-slate-400' }, 'Layer not found.')
-      );
+      inspectorContent.replaceChildren(el('p', { className: 'text-slate-400' }, 'Layer not found.'));
       return;
     }
 
@@ -768,7 +687,6 @@ export class StudioController {
       },
     });
 
-    // Rotation (UI in degrees, stored in radians)
     const rotDeg = Math.round((node.transform.rotation * 180) / Math.PI);
     const rotationInput = el('input', {
       type: 'number',
@@ -783,7 +701,6 @@ export class StudioController {
       },
     });
 
-    // Opacity (0..1 slider)
     const opacityValDisplay = el('span', { className: 'text-indigo-400 font-mono text-[11px]' }, `${Math.round(node.transform.opacity * 100)}%`);
     const opacityInput = el('input', {
       type: 'range',
@@ -851,10 +768,6 @@ export class StudioController {
           const file = (e.target as HTMLInputElement).files?.[0];
           if (!file) return;
           const url = this.assetRegistry.create(file);
-          if (!isValidAssetUrl(url)) {
-            this.showStatus('Invalid asset URL', true);
-            return;
-          }
           imageData.url = url;
           imageData.assetId = `asset_${Date.now()}`;
           this.scene.updateNode(node.id);
@@ -891,32 +804,32 @@ export class StudioController {
         }
       });
 
-      const radiusValDisplay = el('span', { className: 'text-indigo-400 font-mono text-[11px]' }, `${barsData.innerRadius ?? 240}px`);
+      const radiusValDisplay = el('span', { className: 'text-indigo-400 font-mono text-[11px]' }, `${barsData.innerRadius ?? 320}px`);
       const radiusSlider = el('input', {
         type: 'range',
         min: '50',
         max: '600',
         step: '5',
-        value: barsData.innerRadius ?? 240,
+        value: barsData.innerRadius ?? 320,
         className: 'w-full accent-indigo-500 cursor-pointer h-1 bg-slate-700 rounded appearance-none',
         oninput: (e: Event) => {
-          const val = parseInt((e.target as HTMLInputElement).value, 10) || 240;
+          const val = parseInt((e.target as HTMLInputElement).value, 10) || 320;
           barsData.innerRadius = val;
           radiusValDisplay.textContent = `${val}px`;
           this.scene.updateNode(node.id);
         }
       });
 
-      const barWidthValDisplay = el('span', { className: 'text-indigo-400 font-mono text-[11px]' }, `${barsData.width ?? 4}px`);
+      const barWidthValDisplay = el('span', { className: 'text-indigo-400 font-mono text-[11px]' }, `${barsData.width ?? 5}px`);
       const barWidthSlider = el('input', {
         type: 'range',
         min: '1',
         max: '20',
         step: '1',
-        value: barsData.width ?? 4,
+        value: barsData.width ?? 5,
         className: 'w-full accent-indigo-500 cursor-pointer h-1 bg-slate-700 rounded appearance-none',
         oninput: (e: Event) => {
-          const val = parseInt((e.target as HTMLInputElement).value, 10) || 4;
+          const val = parseInt((e.target as HTMLInputElement).value, 10) || 5;
           barsData.width = val;
           barWidthValDisplay.textContent = `${val}px`;
           this.scene.updateNode(node.id);
@@ -1007,64 +920,6 @@ export class StudioController {
       childrenList.push(el('div', { className: 'border-t border-white/10 pt-3 space-y-3' }, ...barsControls));
     }
 
-    // Text Node Controls
-    if (node.type === 'Text' && node.textData) {
-      const textData = node.textData;
-
-      const textValInput = el('textarea', {
-        id: 'textValInput',
-        rows: '2',
-        value: textData.text,
-        className: 'w-full glass-input p-1.5 rounded text-xs resize-none',
-        oninput: (e: Event) => {
-          textData.text = (e.target as HTMLTextAreaElement).value;
-          this.scene.updateNode(node.id);
-        },
-      });
-
-      const fontSizeValDisplay = el('span', { className: 'text-indigo-400 font-mono text-[11px]' }, `${textData.size}px`);
-      const fontSizeSlider = el('input', {
-        type: 'range',
-        min: '10',
-        max: '120',
-        step: '1',
-        value: textData.size,
-        className: 'w-full accent-indigo-500 cursor-pointer h-1 bg-slate-700 rounded appearance-none',
-        oninput: (e: Event) => {
-          const val = parseInt((e.target as HTMLInputElement).value, 10) || 24;
-          textData.size = val;
-          fontSizeValDisplay.textContent = `${val}px`;
-          this.scene.updateNode(node.id);
-        },
-      });
-
-      const textColorPicker = el('input', {
-        type: 'color',
-        value: textData.color || '#ffffff',
-        className: 'w-full h-8 bg-transparent cursor-pointer rounded border border-white/10 p-0.5',
-        oninput: (e: Event) => {
-          textData.color = (e.target as HTMLInputElement).value;
-          this.scene.updateNode(node.id);
-        }
-      });
-
-      childrenList.push(
-        el('div', { className: 'border-t border-white/10 pt-3 space-y-3' },
-          el('h3', { className: 'font-semibold text-slate-300 uppercase text-[10px] tracking-wider' }, 'Text Properties'),
-          el('div', null, el('label', { className: 'block text-slate-400 mb-1' }, 'Text Content'), textValInput),
-          el('div', null,
-            el('div', { className: 'flex justify-between items-center mb-1' },
-              el('label', { className: 'text-slate-400' }, 'Font Size'),
-              fontSizeValDisplay
-            ),
-            fontSizeSlider
-          ),
-          el('div', null, el('label', { className: 'block text-slate-400 mb-1' }, 'Text Color'), textColorPicker)
-        )
-      );
-    }
-
-    // Prominent Red Delete Layer Button
     const deleteLayerBtn = el('button', {
       className: 'w-full py-2 px-3 bg-rose-600/80 hover:bg-rose-600 text-white font-semibold rounded-lg shadow-lg transition flex items-center justify-center gap-1.5 mt-4',
       onclick: () => this.deleteNode(node.id)
@@ -1076,178 +931,124 @@ export class StudioController {
     inspectorContent.replaceChildren(content);
   }
 
+  // لوحة المؤثرات النظيفة: بدون حشر إجباري وبتحكم يدوي رايق!
   private renderPostEffectsPanel(): HTMLElement {
     if (!this.template.postEffects) {
       this.template.postEffects = [];
     }
 
-    let bloom = this.template.postEffects.find((p) => p.type === 'Bloom');
-    if (!bloom) {
-      bloom = { type: 'Bloom', threshold: 0.5, intensity: 1.0 };
-      this.template.postEffects.push(bloom);
-    }
+    const getEffect = <T extends PostEffect['type']>(type: T): PostEffect | undefined => {
+      return this.template.postEffects.find((p) => p.type === type);
+    };
 
-    let ca = this.template.postEffects.find((p) => p.type === 'ChromaticAberration');
-    if (!ca) {
-      ca = { type: 'ChromaticAberration', amount: 0.02 };
-      this.template.postEffects.push(ca);
-    }
-
-    let blur = this.template.postEffects.find((p) => p.type === 'Blur');
-    if (!blur) {
-      blur = { type: 'Blur', blurRadius: 1.0, blurMultiplier: 1.0 };
-      this.template.postEffects.push(blur);
-    }
-
-    let motionBlur = this.template.postEffects.find((p) => p.type === 'MotionBlur');
-    if (!motionBlur) {
-      motionBlur = { type: 'MotionBlur', decay: 0.8 };
-      this.template.postEffects.push(motionBlur);
-    }
-
-    let mirror = this.template.postEffects.find((p) => p.type === 'Mirror');
-    if (!mirror) {
-      mirror = { type: 'Mirror', mirrorMode: 'Horizontal' };
-      this.template.postEffects.push(mirror);
-    }
-
-    const bloomThreshDisplay = el('span', { className: 'text-indigo-400 font-mono text-[11px]' }, `${bloom.threshold ?? 0.5}`);
-    const bloomThreshSlider = el('input', {
-      type: 'range',
-      min: '0',
-      max: '1',
-      step: '0.05',
-      value: bloom.threshold ?? 0.5,
-      className: 'w-full accent-indigo-500 cursor-pointer h-1 bg-slate-700 rounded appearance-none',
-      oninput: (e: Event) => {
-        const val = parseFloat((e.target as HTMLInputElement).value) || 0;
-        bloom!.threshold = val;
-        bloomThreshDisplay.textContent = `${val}`;
+    const toggleEffect = (type: PostEffect['type'], defaultData: PostEffect, enabled: boolean) => {
+      const idx = this.template.postEffects.findIndex((p) => p.type === type);
+      if (enabled && idx === -1) {
+        this.template.postEffects.push(defaultData);
+      } else if (!enabled && idx !== -1) {
+        this.template.postEffects.splice(idx, 1);
       }
-    });
+      this.scene.loadTemplate(this.template);
+      if (this.selectedNodeId) this.scene.selectNode(this.selectedNodeId);
+      this.renderInspector();
+    };
 
-    const bloomIntDisplay = el('span', { className: 'text-indigo-400 font-mono text-[11px]' }, `${bloom.intensity ?? 1.0}`);
-    const bloomIntSlider = el('input', {
-      type: 'range',
-      min: '0',
-      max: '3',
-      step: '0.1',
-      value: bloom.intensity ?? 1.0,
-      className: 'w-full accent-indigo-500 cursor-pointer h-1 bg-slate-700 rounded appearance-none',
-      oninput: (e: Event) => {
-        const val = parseFloat((e.target as HTMLInputElement).value) || 0;
-        bloom!.intensity = val;
-        bloomIntDisplay.textContent = `${val}`;
-      }
-    });
+    const bloom = getEffect('Bloom');
+    const ca = getEffect('ChromaticAberration');
+    const blur = getEffect('Blur');
+    const motionBlur = getEffect('MotionBlur') || getEffect('MotionTrails');
+    const mirror = getEffect('Mirror');
 
-    const caAmtDisplay = el('span', { className: 'text-indigo-400 font-mono text-[11px]' }, `${ca.amount ?? 0.02}`);
-    const caAmtSlider = el('input', {
-      type: 'range',
-      min: '0',
-      max: '0.1',
-      step: '0.005',
-      value: ca.amount ?? 0.02,
-      className: 'w-full accent-indigo-500 cursor-pointer h-1 bg-slate-700 rounded appearance-none',
-      oninput: (e: Event) => {
-        const val = parseFloat((e.target as HTMLInputElement).value) || 0;
-        ca!.amount = val;
-        caAmtDisplay.textContent = `${val}`;
-      }
-    });
-
-    const blurRadDisplay = el('span', { className: 'text-indigo-400 font-mono text-[11px]' }, `${blur.blurRadius ?? 1.0}`);
-    const blurRadSlider = el('input', {
-      type: 'range',
-      min: '0',
-      max: '10',
-      step: '0.5',
-      value: blur.blurRadius ?? 1.0,
-      className: 'w-full accent-indigo-500 cursor-pointer h-1 bg-slate-700 rounded appearance-none',
-      oninput: (e: Event) => {
-        const val = parseFloat((e.target as HTMLInputElement).value) || 0;
-        blur!.blurRadius = val;
-        blurRadDisplay.textContent = `${val}`;
-      }
-    });
-
-    const motionBlurDecayDisplay = el('span', { className: 'text-indigo-400 font-mono text-[11px]' }, `${motionBlur.decay ?? 0.8}`);
-    const motionBlurDecaySlider = el('input', {
-      type: 'range',
-      min: '0',
-      max: '0.95',
-      step: '0.05',
-      value: motionBlur.decay ?? 0.8,
-      className: 'w-full accent-indigo-500 cursor-pointer h-1 bg-slate-700 rounded appearance-none',
-      oninput: (e: Event) => {
-        const val = parseFloat((e.target as HTMLInputElement).value) || 0;
-        motionBlur!.decay = val;
-        motionBlurDecayDisplay.textContent = `${val}`;
-      }
-    });
-
-    const mirrorSelect = el('select', {
-      className: 'w-full glass-input p-1.5 rounded text-xs text-slate-200 bg-slate-800',
+    // Bloom Controls
+    const bloomToggle = el('input', {
+      type: 'checkbox',
+      checked: !!bloom,
+      className: 'accent-indigo-500 w-4 h-4 cursor-pointer',
       onchange: (e: Event) => {
-        mirror!.mirrorMode = (e.target as HTMLSelectElement).value as any;
+        toggleEffect('Bloom', { type: 'Bloom', threshold: 0.8, intensity: 0.4 }, (e.target as HTMLInputElement).checked);
       }
-    },
-      el('option', { value: 'Horizontal', selected: (mirror.mirrorMode || 'Horizontal') === 'Horizontal' }, 'Horizontal'),
-      el('option', { value: 'Vertical', selected: mirror.mirrorMode === 'Vertical' }, 'Vertical'),
-      el('option', { value: 'Both', selected: mirror.mirrorMode === 'Both' }, 'Both')
-    );
+    });
+
+    // CA Controls
+    const caToggle = el('input', {
+      type: 'checkbox',
+      checked: !!ca,
+      className: 'accent-indigo-500 w-4 h-4 cursor-pointer',
+      onchange: (e: Event) => {
+        toggleEffect('ChromaticAberration', { type: 'ChromaticAberration', amount: 0.015 }, (e.target as HTMLInputElement).checked);
+      }
+    });
+
+    // Blur Controls
+    const blurToggle = el('input', {
+      type: 'checkbox',
+      checked: !!blur,
+      className: 'accent-indigo-500 w-4 h-4 cursor-pointer',
+      onchange: (e: Event) => {
+        toggleEffect('Blur', { type: 'Blur', blurRadius: 1.0, blurMultiplier: 0.5 }, (e.target as HTMLInputElement).checked);
+      }
+    });
+
+    // Motion Blur Controls
+    const motionBlurToggle = el('input', {
+      type: 'checkbox',
+      checked: !!motionBlur,
+      className: 'accent-indigo-500 w-4 h-4 cursor-pointer',
+      onchange: (e: Event) => {
+        toggleEffect('MotionBlur', { type: 'MotionBlur', decay: 0.6 }, (e.target as HTMLInputElement).checked);
+      }
+    });
+
+    // Mirror Controls
+    const mirrorToggle = el('input', {
+      type: 'checkbox',
+      checked: !!mirror,
+      className: 'accent-indigo-500 w-4 h-4 cursor-pointer',
+      onchange: (e: Event) => {
+        toggleEffect('Mirror', { type: 'Mirror', mirrorMode: 'Horizontal' }, (e.target as HTMLInputElement).checked);
+      }
+    });
 
     return el('div', { className: 'space-y-3' },
       el('h3', { className: 'font-semibold text-slate-300 uppercase text-[10px] tracking-wider' }, 'Global Post-Effects'),
-      el('div', { className: 'bg-white/5 p-2.5 rounded-lg border border-white/5 space-y-2' },
-        el('span', { className: 'text-xs font-semibold text-slate-200 block' }, 'Gaussian Blur'),
-        el('div', null,
-          el('div', { className: 'flex justify-between items-center mb-1 text-[11px]' },
-            el('label', { className: 'text-slate-400' }, 'Radius'),
-            blurRadDisplay
-          ),
-          blurRadSlider
+      
+      // Bloom Section
+      el('div', { className: 'bg-white/5 p-2 rounded-lg border border-white/5 space-y-1.5' },
+        el('div', { className: 'flex justify-between items-center' },
+          el('span', { className: 'text-xs font-medium text-slate-200' }, 'Bloom Glow'),
+          bloomToggle
         )
       ),
-      el('div', { className: 'bg-white/5 p-2.5 rounded-lg border border-white/5 space-y-2' },
-        el('span', { className: 'text-xs font-semibold text-slate-200 block' }, 'Motion Blur'),
-        el('div', null,
-          el('div', { className: 'flex justify-between items-center mb-1 text-[11px]' },
-            el('label', { className: 'text-slate-400' }, 'Decay'),
-            motionBlurDecayDisplay
-          ),
-          motionBlurDecaySlider
+
+      // Chromatic Aberration Section
+      el('div', { className: 'bg-white/5 p-2 rounded-lg border border-white/5 space-y-1.5' },
+        el('div', { className: 'flex justify-between items-center' },
+          el('span', { className: 'text-xs font-medium text-slate-200' }, 'RGB Split'),
+          caToggle
         )
       ),
-      el('div', { className: 'bg-white/5 p-2.5 rounded-lg border border-white/5 space-y-2' },
-        el('span', { className: 'text-xs font-semibold text-slate-200 block' }, 'Mirror Effect'),
-        mirrorSelect
-      ),
-      el('div', { className: 'bg-white/5 p-2.5 rounded-lg border border-white/5 space-y-2' },
-        el('span', { className: 'text-xs font-semibold text-slate-200 block' }, 'Bloom'),
-        el('div', null,
-          el('div', { className: 'flex justify-between items-center mb-1 text-[11px]' },
-            el('label', { className: 'text-slate-400' }, 'Threshold'),
-            bloomThreshDisplay
-          ),
-          bloomThreshSlider
-        ),
-        el('div', null,
-          el('div', { className: 'flex justify-between items-center mb-1 text-[11px]' },
-            el('label', { className: 'text-slate-400' }, 'Intensity'),
-            bloomIntDisplay
-          ),
-          bloomIntSlider
+
+      // Blur Section
+      el('div', { className: 'bg-white/5 p-2 rounded-lg border border-white/5 space-y-1.5' },
+        el('div', { className: 'flex justify-between items-center' },
+          el('span', { className: 'text-xs font-medium text-slate-200' }, 'Gaussian Blur'),
+          blurToggle
         )
       ),
-      el('div', { className: 'bg-white/5 p-2.5 rounded-lg border border-white/5 space-y-2' },
-        el('span', { className: 'text-xs font-semibold text-slate-200 block' }, 'Chromatic Aberration'),
-        el('div', null,
-          el('div', { className: 'flex justify-between items-center mb-1 text-[11px]' },
-            el('label', { className: 'text-slate-400' }, 'Amount'),
-            caAmtDisplay
-          ),
-          caAmtSlider
+
+      // Motion Blur Section
+      el('div', { className: 'bg-white/5 p-2 rounded-lg border border-white/5 space-y-1.5' },
+        el('div', { className: 'flex justify-between items-center' },
+          el('span', { className: 'text-xs font-medium text-slate-200' }, 'Motion Trails'),
+          motionBlurToggle
+        )
+      ),
+
+      // Mirror Section
+      el('div', { className: 'bg-white/5 p-2 rounded-lg border border-white/5 space-y-1.5' },
+        el('div', { className: 'flex justify-between items-center' },
+          el('span', { className: 'text-xs font-medium text-slate-200' }, 'Mirror Screen'),
+          mirrorToggle
         )
       )
     );
@@ -1284,57 +1085,33 @@ export class StudioController {
     this.animationFrameId = requestAnimationFrame(loop);
   }
 
-
   public async saveTemplateAsOvz(): Promise<Blob> {
     const zip = new JSZip();
-
-    // Create a clean copy of the template JSON to store
     const templateCopy: OpenVizTemplate = JSON.parse(JSON.stringify(this.template));
 
-    // Ensure assets dictionary exists
-    if (!templateCopy.assets) {
-      templateCopy.assets = {};
-    }
-
+    if (!templateCopy.assets) templateCopy.assets = {};
     const assetsFolder = zip.folder('assets');
 
     for (const node of templateCopy.nodes) {
-      if (node.type === 'Image' && node.imageData) {
-        const url = node.imageData.url;
-        if (url) {
-          try {
-            let blob: Blob;
-            if (url.startsWith('data:')) {
-              const res = await fetch(url);
-              blob = await res.blob();
-            } else if (url.startsWith('blob:')) {
-              const res = await fetch(url);
-              blob = await res.blob();
-            } else {
-              const res = await fetch(url);
-              blob = await res.blob();
-            }
+      if (node.type === 'Image' && node.imageData?.url) {
+        try {
+          const res = await fetch(node.imageData.url);
+          const blob = await res.blob();
+          const assetId = node.imageData.assetId || `asset_${Date.now()}`;
+          const ext = blob.type.split('/')[1] || 'png';
+          const fileName = `${assetId}.${ext}`;
 
-            const assetId = node.imageData.assetId || `asset_${Date.now()}`;
-            const ext = blob.type.split('/')[1] || 'png';
-            const fileName = `${assetId}.${ext}`;
-
-            if (assetsFolder) {
-              assetsFolder.file(fileName, blob);
-            }
-
-            templateCopy.assets[assetId] = `assets/${fileName}`;
-            node.imageData.assetId = assetId;
-            node.imageData.url = `assets/${fileName}`;
-          } catch (err) {
-            console.warn(`Could not bundle image asset for node ${node.id}:`, err);
-          }
+          if (assetsFolder) assetsFolder.file(fileName, blob);
+          templateCopy.assets[assetId] = `assets/${fileName}`;
+          node.imageData.assetId = assetId;
+          node.imageData.url = `assets/${fileName}`;
+        } catch (err) {
+          console.warn(`Could not bundle image asset for node ${node.id}:`, err);
         }
       }
     }
 
     zip.file('scene.json', JSON.stringify(templateCopy, null, 2));
-
     const ovzBlob = await zip.generateAsync({ type: 'blob', mimeType: 'application/octet-stream' });
 
     if (typeof document !== 'undefined') {
@@ -1353,13 +1130,10 @@ export class StudioController {
   public async loadOvzBuffer(buffer: ArrayBuffer): Promise<OpenVizTemplate> {
     const zip = await JSZip.loadAsync(buffer);
     const sceneJsonFile = zip.file('scene.json');
-    if (!sceneJsonFile) {
-      throw new Error('Invalid .ovz project: missing scene.json');
-    }
+    if (!sceneJsonFile) throw new Error('Invalid .ovz project: missing scene.json');
 
     const sceneJsonText = await sceneJsonFile.async('string');
     const parsedTemplate: OpenVizTemplate = JSON.parse(sceneJsonText);
-
     const assetUrls: Record<string, string> = {};
 
     for (const node of parsedTemplate.nodes) {
@@ -1371,9 +1145,7 @@ export class StudioController {
             const blob = await zipFile.async('blob');
             const url = this.assetRegistry.create(blob);
             node.imageData.url = url;
-            if (node.imageData.assetId) {
-              assetUrls[node.imageData.assetId] = url;
-            }
+            if (node.imageData.assetId) assetUrls[node.imageData.assetId] = url;
           }
         }
       }
