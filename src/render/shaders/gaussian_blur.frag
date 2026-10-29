@@ -7,7 +7,9 @@ varying vec2 vUv;
 
 void main() {
   vec2 off = direction * texelSize * blurRadius;
-  vec4 sum = texture2D(tDiffuse, vUv) * 0.227027;
+  vec4 unblurred = texture2D(tDiffuse, vUv);
+
+  vec4 sum = unblurred * 0.227027;
 
   sum += texture2D(tDiffuse, vUv + off * 1.0) * 0.194594;
   sum += texture2D(tDiffuse, vUv - off * 1.0) * 0.194594;
@@ -21,5 +23,5 @@ void main() {
   sum += texture2D(tDiffuse, vUv + off * 4.0) * 0.016216;
   sum += texture2D(tDiffuse, vUv - off * 4.0) * 0.016216;
 
-  gl_FragColor = sum * blurMultiplier;
+  gl_FragColor = mix(unblurred, sum, clamp(blurMultiplier, 0.0, 1.0));
 }

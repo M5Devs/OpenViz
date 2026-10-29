@@ -155,7 +155,7 @@ describe('Vetted Open-Source Presets and Effects', () => {
     const monstercat = getMonstercatPreset();
     scene.loadTemplate(monstercat);
 
-    // Monstercat has Bloom and ChromaticAberration -> 1 RenderPass + 2 postEffect passes = 3
-    expect(scene.composer.passes.length).toBe(3);
+    // Monstercat has Bloom and ChromaticAberration -> 1 RenderPass + 2 postEffects + 1 OutputPass = 4
+    expect(scene.composer.passes.length).toBe(4);
   });
 });

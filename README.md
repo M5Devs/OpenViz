@@ -1,42 +1,58 @@
 # OpenViz
 
-**OpenViz** is a modern, web-native creative suite and audio visualizer inspired by Vizzy.io. Built entirely on a pure TypeScript/Web stack, OpenViz offers real-time audio reactivity, non-destructive DSP audio effects, interactive visual element editing, and hardware-accelerated video rendering directly in the browser.
+**OpenViz** is a modern, web-native creative suite and audio visualizer engine inspired by open-source audio players and visualizers. Built entirely on a pure TypeScript/Web stack, OpenViz offers real-time audio reactivity, non-destructive DSP audio effects, interactive visual element editing, and hardware-accelerated video rendering directly in the browser.
 
 ---
 
 ## Stack Architecture
 
-- **Core Renderer:** TypeScript + Three.js (`three`)
-- **Audio DSP Pipeline:** WebAudio API (`AnalyserNode`, `BiquadFilterNode`, `StereoPannerNode`, `DelayNode`)
+- **Core Renderer:** TypeScript + Three.js (`three`) with `EffectComposer`, `OutputPass`, `AfterimagePass`, and custom GLSL post-processing effects
+- **Audio DSP Pipeline:** WebAudio API (`AnalyserNode`, `BiquadFilterNode`, `StereoPannerNode`, `DelayNode`) with 64-band logarithmic FFT analysis
 - **Video Exporter:** Hardware-accelerated WebCodecs (`VideoEncoder`) with `mp4-muxer` (AVC H.264)
-- **Avee Template Importer:** `jszip` for parsing legacy `.viz` templates and local assets
+- **Avee Template Importer:** `jszip` for parsing `.viz` templates, asset extraction, and anchor/coordinate mapping
 - **Interactive Web Studio:** Vite + Glassmorphic UI with Three.js `TransformControls` (live on-canvas Gizmo)
 - **Terminal CLI:** Node.js CLI (`bin/openviz.js`) using `commander` for template inspection and utilities
 - **Styling & Testing:** TailwindCSS + Vitest
 
 ---
 
-## Features
+## Features & Supported Scope
 
-- **Live Glassmorphic Web Studio**:
+### Currently Implemented Features:
+- **Live Interactive Web Studio**:
   - Fullscreen WebGL viewport with interactive on-canvas handles for translation, scaling, and rotation.
-  - Layer tree manager for adding Spectrum Bars, Images, and Text.
+  - Layer tree manager for Spectrum Bars, Images, and Text elements.
   - Property Inspector for live tweaking of transforms, colors, and audio reactivity bindings.
   - Waveform timeline scrubber and audio playback controls.
-- **Real-Time WebAudio DSP Effects**:
-  - **Bass Boost:** Low-shelf biquad filter at 120Hz (+0dB to +18dB).
-  - **Slowed + Reverb:** Pitch-altered playback (0.85x) with cross-feedback delay network.
-  - **Nightcore:** Sped-up playback rate (1.25x).
-  - **8D Audio:** Smooth continuous LFO stereo panning.
-  - **64-Band Spectrum Analysis:** Normalized FFT partitioning for Bass, Mid, High, Beat, and RMS reactivity.
+- **Audio Reactivity & DSP Engine**:
+  - 64-Band Spectrum Analysis with logarithmic frequency spacing (`logSpace`), asymmetric attack/decay smoothing, and flux-based beat detection.
+  - Audio reactivity bindings (`Bass`, `Mid`, `High`, `Beat`, `RMS`, `Spectrum`) targeting scale, bar height, rotation, opacity, and camera shake.
+  - Real-time DSP Audio Effects: Bass Boost, Slowed + Reverb, Nightcore, 8D Audio panning.
+- **2D/3D Shapes & Geometries**:
+  - Radial (Circle) and Linear (Horizontal Line) Spectrum Bars.
+  - SidedPolygon path sampling with rounding controls and Letter glyph sampling.
+  - Fullscreen wallpaper cover fitting and proportional image badge scaling.
+- **Post-Processing Pipeline**:
+  - sRGB gamma color correctness via `OutputPass`.
+  - Temporal Motion Blur / Motion Trails using `AfterimagePass` feedback.
+  - Separable 2-Pass Gaussian Blur with 5-tap kernel weights and mix blending.
+  - Chromatic Aberration (RGB Split), Unreal Bloom, Mirror, VHS, and FidelityFX CAS sharpening.
 - **Client-Side WebCodecs Video Export**:
-  - Frame-by-frame offline rendering at 1080p 60fps with H.264 hardware acceleration.
-  - Fast in-memory MP4 muxing via `mp4-muxer` for instant MP4 video downloads.
+  - Offline 1080p 60fps frame rendering with hardware H.264 WebCodecs encoding and MP4 muxing.
 - **Avee `.viz` Importer**:
-  - Unzips and converts `.viz` archives and `scene.json` into clean OpenViz JSON schema.
-  - Extracts local asset image buffers into textures.
-  - Maps audio reactivity measures (`Beat`, `Bass`, `Mid`, `High`, `RMS`) to scale, rotation, height, and opacity bindings.
-  - Built-in path traversal security protection for ZIP entries.
+  - Unzips and converts `.viz` archives and `scene.json` into OpenViz JSON schema with path traversal security checks.
+
+### Future Roadmap:
+- Particle compute engine and custom WebGPU compute shaders.
+- Audio stem separation (vocal/drum isolation).
+- 3D mesh model support (.gltf / .glb) in visualizer compositions.
+
+---
+
+## Attribution & Acknowledgments
+
+Selected algorithms (such as logarithmic frequency spacing and composition element parsing) are derived from or inspired by open-source projects, including:
+- [AveeOpenPlayer_1.0.34](https://github.com/Azy-Kun/AveeOpenPlayer_1.0.34) (Apache License 2.0)
 
 ---
 
@@ -47,7 +63,7 @@
 npm install
 
 # 2. Launch Web Studio local development server
-npm run dev
+# npm run dev
 
 # 3. Build production bundle
 npm run build
@@ -69,9 +85,6 @@ node bin/openviz.js info template.viz
 
 # Convert a .viz archive to OpenViz JSON schema
 node bin/openviz.js convert template.viz -o output_template.json
-
-# Launch local Vite studio server via CLI
-node bin/openviz.js dev
 ```
 
 ---

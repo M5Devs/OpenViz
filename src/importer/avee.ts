@@ -13,6 +13,12 @@ import {
 import { validateTemplate } from '../schema/validate';
 import { ObjectUrlRegistry } from '../assets/registry';
 
+/*
+ * Derived algorithms and element mapping patterns adapted from:
+ * Azy-Kun/AveeOpenPlayer_1.0.34 (Apache License 2.0)
+ * https://github.com/Azy-Kun/AveeOpenPlayer_1.0.34
+ */
+
 export interface RawProp {
   v?: any;
   t?: string;
@@ -460,10 +466,14 @@ export class AveeImporter {
 
     const children = pEl.children || pEl;
 
-    // 1. Position normalization: Avee [0.0, 1.0] (center 0.5, 0.5) -> Pixel Space [-960..960, -540..540]
+    // 1. Position & Anchor normalization:
+    // Avee [0.0, 1.0] (center 0.5, 0.5) -> Pixel Space [-960..960, -540..540]
+    // Handles anchorX, anchorY, alignmentPosition offsets relative to 1920x1080 canvas bounds
     const rawPos = getF32Tuple2(pick(children.position, el.position), [0.5, 0.5]);
-    const posX = (rawPos[0] - 0.5) * 1920;
-    const posY = (0.5 - rawPos[1]) * 1080;
+    const anchor = getF32Tuple2(pick(children.anchor, children.alignmentPosition, el.anchor, el.alignmentPosition), [0.5, 0.5]);
+
+    const posX = (rawPos[0] - anchor[0]) * 1920;
+    const posY = (anchor[1] - rawPos[1]) * 1080;
 
     const rawScale = getF32Tuple2(pick(children.scale, el.scale), [1.0, 1.0]);
     const rot = getF32(pick(children.rotation, el.rotation), 0);

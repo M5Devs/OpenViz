@@ -84,7 +84,9 @@ export type PostEffectType =
   | 'Bloom'
   | 'Blur'
   | 'MotionBlur'
-  | 'Mirror';
+  | 'Mirror'
+  | 'VHS'
+  | 'FidelityFXCAS';
 
 export type BlendModeType = 'Normal' | 'Additive' | 'Multiply' | 'Screen';
 
@@ -100,6 +102,7 @@ export interface PostEffect {
   blurMultiplier?: number;
   mirrorMode?: 'Horizontal' | 'Vertical' | 'Both';
   blendMode?: BlendModeType;
+  noiseAmount?: number;
 }
 
 export interface OpenVizTemplate {

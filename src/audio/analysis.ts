@@ -1,3 +1,9 @@
+/*
+ * Frequency distribution and DSP spectrum analysis algorithms adapted from:
+ * Azy-Kun/AveeOpenPlayer_1.0.34 (Apache License 2.0)
+ * https://github.com/Azy-Kun/AveeOpenPlayer_1.0.34
+ */
+
 export function logSpace(minFreq: number, maxFreq: number, index: number, total: number, linearFactor: number): number {
   if (total <= 0) return minFreq;
   const centerFreq = minFreq * Math.pow(maxFreq / minFreq, index / total);
