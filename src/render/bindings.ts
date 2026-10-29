@@ -27,6 +27,27 @@ export function mulberry32(a: number): () => number {
   };
 }
 
+const prevMeasureValues: Map<string, { value: number; time: number }> = new Map();
+
+export function computeMeasureEnvelope(
+  baseValue: number,
+  measureVal: number,
+  a: number,
+  b: number,
+  key: string,
+  timeSeconds: number
+): number {
+  let derivative = 0;
+  const prev = prevMeasureValues.get(key);
+  if (prev && timeSeconds > prev.time) {
+    const dt = timeSeconds - prev.time;
+    derivative = (measureVal - prev.value) / dt;
+  }
+  prevMeasureValues.set(key, { value: measureVal, time: timeSeconds });
+
+  return baseValue + a * measureVal + b * derivative;
+}
+
 function getSourceValue(source: AudioBinding['source'], audio: FrequencyData): number {
   switch (source) {
     case 'Bass':
@@ -37,6 +58,10 @@ function getSourceValue(source: AudioBinding['source'], audio: FrequencyData): n
       return audio.high ?? 0;
     case 'Beat':
       return audio.beat ?? 0;
+    case 'BeatRandomShake':
+      return audio.beatRandomShake ?? 0;
+    case 'ConstantShake':
+      return audio.constantShake ?? 0;
     case 'Rms':
       return audio.rms ?? 0;
     case 'Spectrum': {
@@ -52,7 +77,6 @@ function getSourceValue(source: AudioBinding['source'], audio: FrequencyData): n
   }
 }
 
-// TODO: Verify whether importer/template emits degrees or radians for rotation bindings
 export function computeAnimatedState(
   node: OpenVizNode,
   audio: FrequencyData,
@@ -66,10 +90,20 @@ export function computeAnimatedState(
   let sceneAmp = 0.0;
 
   if (node.bindings && node.bindings.length > 0) {
-    for (const binding of node.bindings) {
+    for (let i = 0; i < node.bindings.length; i++) {
+      const binding = node.bindings[i];
       const sourceVal = getSourceValue(binding.source, audio);
       const [minOut, maxOut] = binding.outputRange;
-      const mapped = minOut + sourceVal * (maxOut - minOut);
+
+      let mapped: number;
+      if (binding.aCoeff !== undefined || binding.bCoeff !== undefined) {
+        const key = `${node.id}_b${i}`;
+        const aCoeff = binding.aCoeff ?? (maxOut - minOut);
+        const bCoeff = binding.bCoeff ?? 0;
+        mapped = computeMeasureEnvelope(minOut, sourceVal, aCoeff, bCoeff, key, timeSeconds);
+      } else {
+        mapped = minOut + sourceVal * (maxOut - minOut);
+      }
 
       switch (binding.target) {
         case 'ScaleUniform':

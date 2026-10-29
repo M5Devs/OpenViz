@@ -1,4 +1,12 @@
-export type BindingSource = 'Bass' | 'Mid' | 'High' | 'Beat' | 'Rms' | 'Spectrum';
+export type BindingSource =
+  | 'Bass'
+  | 'Mid'
+  | 'High'
+  | 'Beat'
+  | 'BeatRandomShake'
+  | 'ConstantShake'
+  | 'Rms'
+  | 'Spectrum';
 
 export type BindingTarget =
   | 'ScaleUniform'
@@ -12,28 +20,32 @@ export interface AudioBinding {
   source: BindingSource;
   target: BindingTarget;
   outputRange: [number, number];
+  aCoeff?: number;
+  bCoeff?: number;
 }
 
-/**
- * Node transform settings.
- * For Image nodes, transform.scale is a MULTIPLIER of the image's base display size.
- * Base display size: natural texture size fitted ('contain') into a 360x360 box.
- * If imageData.fit === 'cover', base size = natural size covering the logical canvas (1080 height x aspect width).
- */
 export interface NodeTransform {
   position: [number, number];
   scale: [number, number];
-  rotation: number; // radians or degrees in UI
+  rotation: number;
   opacity: number;
 }
 
 export type NodeType = 'Bars' | 'Image' | 'Group' | 'Text';
+
+export type ShapePathType = 'Circle' | 'HorizontalLine' | 'SidedPolygon' | 'Letter';
+export type SegmentStyle = 'Bars' | 'Line' | 'SharpBars' | 'RoundBars';
 
 export interface BarsNodeData {
   count: number;
   innerRadius: number;
   width: number;
   isRadial: boolean;
+  shapePath?: ShapePathType;
+  sidedPolygonSides?: number;
+  sidedPolygonRounding?: number;
+  letterChar?: string;
+  segments?: SegmentStyle;
   colorStart: [number, number, number, number];
   colorEnd: [number, number, number, number];
 }
@@ -66,7 +78,15 @@ export interface OpenVizNode {
   groupData?: GroupNodeData;
 }
 
-export type PostEffectType = 'ChromaticAberration' | 'MotionTrails' | 'Bloom';
+export type PostEffectType =
+  | 'ChromaticAberration'
+  | 'MotionTrails'
+  | 'Bloom'
+  | 'Blur'
+  | 'MotionBlur'
+  | 'Mirror';
+
+export type BlendModeType = 'Normal' | 'Additive' | 'Multiply' | 'Screen';
 
 export interface PostEffect {
   type: PostEffectType;
@@ -76,6 +96,10 @@ export interface PostEffect {
   threshold?: number;
   intensity?: number;
   radius?: number;
+  blurRadius?: number;
+  blurMultiplier?: number;
+  mirrorMode?: 'Horizontal' | 'Vertical' | 'Both';
+  blendMode?: BlendModeType;
 }
 
 export interface OpenVizTemplate {
@@ -86,7 +110,7 @@ export interface OpenVizTemplate {
   clearColor: [number, number, number, number];
   nodes: OpenVizNode[];
   postEffects: PostEffect[];
-  assets?: Record<string, string>; // assetId -> DataUrl or ObjectURL
+  assets?: Record<string, string>;
 }
 
 export interface DSPState {
@@ -101,6 +125,8 @@ export interface FrequencyData {
   mid: number;
   high: number;
   beat: number;
+  beatRandomShake?: number;
+  constantShake?: number;
   rms: number;
   spectrum: Float32Array;
 }

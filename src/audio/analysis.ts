@@ -1,7 +1,3 @@
-/**
- * Avee Player logarithmic spacing formula for frequency band distribution.
- * Calculates center/boundary frequency for band `index` out of `total` bands.
- */
 export function logSpace(minFreq: number, maxFreq: number, index: number, total: number, linearFactor: number): number {
   if (total <= 0) return minFreq;
   const centerFreq = minFreq * Math.pow(maxFreq / minFreq, index / total);
@@ -22,6 +18,8 @@ export interface SpectrumAnalyzerOptions {
   tiltDbPerOct?: number;
   dbRange?: number;
   smoothing?: number;
+  attackSmoothing?: number;
+  decaySmoothing?: number;
   frameRate?: number;
 }
 
@@ -35,25 +33,24 @@ export class SpectrumAnalyzer {
   private tiltDbPerOct: number;
   private dbRange: number;
   private smoothing: number;
+  private attackSmoothing: number;
+  private decaySmoothing: number;
   private frameRate: number;
 
   private fft: FFT;
   private windowSum: number;
 
-  // Reused buffers (no allocations in analyze)
   private window: Float32Array;
   private realBuf: Float32Array;
   private imagBuf: Float32Array;
-  private magBuf: Float32Array; // scaled linear amplitudes 0..N/2
+  private magBuf: Float32Array;
   private bandRawBuf: Float32Array;
   private bandPrevBuf: Float32Array;
   private spectrumBuf: Float32Array;
 
-  // Band edges and centers
-  private bandEdgesBins: Float32Array; // length bandsCount + 1
-  private bandCenterHz: Float32Array; // length bandsCount
+  private bandEdgesBins: Float32Array;
+  private bandCenterHz: Float32Array;
 
-  // Beat detection history buffer & state
   private fluxHistory: Float32Array;
   private fluxHistoryCapacity: number;
   private fluxHistoryCount: number = 0;
@@ -61,6 +58,8 @@ export class SpectrumAnalyzer {
   private prevBassBandsRaw: Float32Array;
   private bassBandIndices: number[] = [];
   private beatEnvelope: number = 0;
+
+  private frameCounter: number = 0;
 
   constructor(options: SpectrumAnalyzerOptions) {
     this.sampleRate = options.sampleRate;
@@ -72,11 +71,17 @@ export class SpectrumAnalyzer {
     this.tiltDbPerOct = options.tiltDbPerOct ?? 3;
     this.dbRange = options.dbRange ?? 80;
     this.smoothing = options.smoothing ?? 0.6;
+    if (options.smoothing === 0) {
+      this.attackSmoothing = 1.0;
+      this.decaySmoothing = 1.0;
+    } else {
+      this.attackSmoothing = options.attackSmoothing ?? 0.60;
+      this.decaySmoothing = options.decaySmoothing ?? 0.15;
+    }
     this.frameRate = options.frameRate ?? 60;
 
     this.fft = FFT.get(this.fftSize);
 
-    // Precompute Hann window and window sum
     this.window = new Float32Array(this.fftSize);
     let sum = 0;
     for (let i = 0; i < this.fftSize; i++) {
@@ -89,7 +94,6 @@ export class SpectrumAnalyzer {
     const nyquist = this.sampleRate / 2;
     const nyquistBins = this.fftSize / 2;
 
-    // Allocate internal buffers
     this.realBuf = new Float32Array(this.fftSize);
     this.imagBuf = new Float32Array(this.fftSize);
     this.magBuf = new Float32Array(nyquistBins + 1);
@@ -97,22 +101,17 @@ export class SpectrumAnalyzer {
     this.bandPrevBuf = new Float32Array(this.bandsCount);
     this.spectrumBuf = new Float32Array(this.bandsCount);
 
-    // Precompute band edges in Hz and fractional bin indices
     this.bandEdgesBins = new Float32Array(this.bandsCount + 1);
     this.bandCenterHz = new Float32Array(this.bandsCount);
 
     const minHz = Math.max(1e-4, this.lowHz);
     const maxHz = Math.min(nyquist, this.highHz);
 
-    const logLow = Math.log(minHz);
-    const logHigh = Math.log(maxHz);
-
     const edgesHz: number[] = [];
     for (let i = 0; i <= this.bandsCount; i++) {
       const blendedHz = logSpace(minHz, maxHz, i, this.bandsCount, this.linearMix);
       edgesHz.push(blendedHz);
-      // convert Hz to fractional bin k = f * fftSize / sampleRate
-      this.bandEdgesBins[i] = (blendedHz * this.fftSize) / this.sampleRate;
+      this.bandEdgesBins[i] = Math.round((blendedHz * this.fftSize) / this.sampleRate);
     }
 
     for (let i = 0; i < this.bandsCount; i++) {
@@ -124,7 +123,6 @@ export class SpectrumAnalyzer {
       }
     }
 
-    // Allocate history for beat detection (~1 second history)
     this.fluxHistoryCapacity = Math.max(1, Math.round(this.frameRate));
     this.fluxHistory = new Float32Array(this.fluxHistoryCapacity);
     this.prevBassBandsRaw = new Float32Array(this.bandsCount);
@@ -139,13 +137,14 @@ export class SpectrumAnalyzer {
     this.fluxHistoryHead = 0;
     this.prevBassBandsRaw.fill(0);
     this.beatEnvelope = 0;
+    this.frameCounter = 0;
   }
 
   public analyze(samples: Float32Array): FrequencyData {
+    this.frameCounter++;
     const N = this.fftSize;
     const nyquistBins = N / 2;
 
-    // f. RMS from time-domain window (map -60..0 dBFS -> 0..1)
     let sumSq = 0;
     const len = Math.min(samples.length, N);
     for (let i = 0; i < len; i++) {
@@ -153,21 +152,17 @@ export class SpectrumAnalyzer {
       sumSq += s * s;
     }
     const rawRms = Math.sqrt(sumSq / (len || 1));
-    const rmsDb = 20 * Math.log10(Math.max(1e-6, rawRms)); // dBFS
-    // Map [-60, 0] dBFS -> [0, 1]
+    const rmsDb = 20 * Math.log10(Math.max(1e-6, rawRms));
     const rmsVal = Math.max(0, Math.min(1, (rmsDb + 60) / 60));
 
-    // a. Hann windowing and real FFT setup
     this.realBuf.fill(0);
     this.imagBuf.fill(0);
     for (let i = 0; i < len; i++) {
       this.realBuf[i] = samples[i] * this.window[i];
     }
 
-    // FFT
     this.fft.transform(this.realBuf, this.imagBuf);
 
-    // Compute scaled linear magnitudes: 2 * |X[k]| / sum(window)
     const norm = 2.0 / (this.windowSum || 1);
     for (let k = 0; k <= nyquistBins; k++) {
       const re = this.realBuf[k];
@@ -176,19 +171,17 @@ export class SpectrumAnalyzer {
       this.magBuf[k] = mag;
     }
 
-    // b & c & d. Compute bands, apply tilt, convert to dB -> [0,1]
     for (let b = 0; b < this.bandsCount; b++) {
       const startBin = this.bandEdgesBins[b];
       const endBin = this.bandEdgesBins[b + 1];
       const centerHz = this.bandCenterHz[b];
 
       let rawAmp = 0;
-      if (endBin - startBin >= 1.0) {
-        // RMS of bins inside [startBin, endBin]
-        const minK = Math.max(0, Math.ceil(startBin));
-        const maxK = Math.min(nyquistBins, Math.floor(endBin));
+      if (endBin > startBin) {
         let binSumSq = 0;
         let count = 0;
+        const minK = Math.max(0, Math.min(nyquistBins, startBin));
+        const maxK = Math.max(0, Math.min(nyquistBins, endBin - 1));
         for (let k = minK; k <= maxK; k++) {
           const m = this.magBuf[k];
           binSumSq += m * m;
@@ -196,36 +189,33 @@ export class SpectrumAnalyzer {
         }
         rawAmp = count > 0 ? Math.sqrt(binSumSq / count) : 0;
       } else {
-        // Linear interpolation at band center bin
-        const centerBin = (startBin + endBin) / 2;
-        const k0 = Math.floor(centerBin);
-        const k1 = Math.min(nyquistBins, k0 + 1);
-        const frac = centerBin - k0;
-        const m0 = k0 >= 0 && k0 <= nyquistBins ? this.magBuf[k0] : 0;
-        const m1 = k1 >= 0 && k1 <= nyquistBins ? this.magBuf[k1] : 0;
-        rawAmp = m0 + frac * (m1 - m0);
+        const k0 = Math.max(0, Math.min(nyquistBins, startBin));
+        rawAmp = this.magBuf[k0];
       }
 
-      // c. Tilt: multiply by 10^(tilt * log2(f/1000) / 20)
       if (this.tiltDbPerOct !== 0 && centerHz > 0) {
         const oct = Math.log2(centerHz / 1000);
         const tiltFactor = Math.pow(10, (this.tiltDbPerOct * oct) / 20);
         rawAmp *= tiltFactor;
       }
 
-      // d. Convert to dB and map [-dbRange, 0] -> [0, 1]
       const db = 20 * Math.log10(Math.max(1e-6, rawAmp));
       const normalized = Math.max(0, Math.min(1, (db + this.dbRange) / this.dbRange));
 
       this.bandRawBuf[b] = normalized;
 
-      // e. Temporal smoothing: s = prev * smoothing + current * (1 - smoothing)
-      const smoothed = this.bandPrevBuf[b] * this.smoothing + normalized * (1 - this.smoothing);
+      const prevSmoothed = this.bandPrevBuf[b];
+      let smoothed: number;
+      if (normalized > prevSmoothed) {
+        smoothed = prevSmoothed + this.attackSmoothing * (normalized - prevSmoothed);
+      } else {
+        smoothed = prevSmoothed + this.decaySmoothing * (normalized - prevSmoothed);
+      }
+
       this.bandPrevBuf[b] = smoothed;
       this.spectrumBuf[b] = smoothed;
     }
 
-    // f. Region averages: bass (20-250 Hz), mid (250-4000 Hz), high (4000-16000 Hz)
     let bassSum = 0, bassCount = 0;
     let midSum = 0, midCount = 0;
     let highSum = 0, highCount = 0;
@@ -251,7 +241,6 @@ export class SpectrumAnalyzer {
     const mid = midCount > 0 ? Math.max(0, Math.min(1, midSum / midCount)) : 0;
     const high = highCount > 0 ? Math.max(0, Math.min(1, highSum / highCount)) : 0;
 
-    // g. Beat detection via spectral flux on bass bands
     let flux = 0;
     for (const b of this.bassBandIndices) {
       const currentRaw = this.bandRawBuf[b];
@@ -263,7 +252,6 @@ export class SpectrumAnalyzer {
       this.prevBassBandsRaw[b] = currentRaw;
     }
 
-    // Adaptive threshold over history
     this.fluxHistory[this.fluxHistoryHead] = flux;
     this.fluxHistoryHead = (this.fluxHistoryHead + 1) % this.fluxHistoryCapacity;
     if (this.fluxHistoryCount < this.fluxHistoryCapacity) {
@@ -290,19 +278,26 @@ export class SpectrumAnalyzer {
       instantBeat = Math.min(1.0, diff * 3.0);
     }
 
-    // Decay envelope for beat output
     if (instantBeat > this.beatEnvelope) {
       this.beatEnvelope = instantBeat;
     } else {
-      this.beatEnvelope *= 0.85; // fast decay (~100ms)
+      this.beatEnvelope *= 0.85;
     }
     const beat = Math.max(0, Math.min(1, this.beatEnvelope));
+
+    const pseudoRandom = Math.sin(this.frameCounter * 12.9898 + 78.233);
+    const beatRandomShake = beat * pseudoRandom;
+
+    const tSec = this.frameCounter / this.frameRate;
+    const constantShake = Math.sin(tSec * 2.5) * 0.5 + Math.cos(tSec * 5.7) * 0.5;
 
     return {
       bass,
       mid,
       high,
       beat,
+      beatRandomShake,
+      constantShake,
       rms: rmsVal,
       spectrum: this.spectrumBuf,
     };
