@@ -1,5 +1,5 @@
 import { DSPState, FrequencyData } from '../types';
-import { SpectrumAnalyzer } from './analysis';
+import { createAnalyzer, AudioAnalyzer } from './factory';
 
 export function mulberry32(a: number) {
   return function () {
@@ -53,7 +53,8 @@ export class AudioEngine {
   private audioObjectUrl: string | null = null;
   private decodedAudioBuffer: AudioBuffer | null = null;
   private timeDomainBuffer: Float32Array = new Float32Array(4096);
-  private spectrumAnalyzer: SpectrumAnalyzer | null = null;
+  private spectrumAnalyzer: AudioAnalyzer | null = null;
+  private analysisMode: 'openviz' | 'avee-classic' = 'openviz';
 
   constructor() {
     this.audioEl = new Audio();
@@ -109,11 +110,7 @@ export class AudioEngine {
     this.analyser = this.ctx.createAnalyser();
     this.analyser.fftSize = 4096;
 
-    this.spectrumAnalyzer = new SpectrumAnalyzer({
-      sampleRate: this.ctx.sampleRate || 44100,
-      fftSize: 4096,
-      bands: 64,
-    });
+    this.spectrumAnalyzer = createAnalyzer(this.analysisMode, this.ctx.sampleRate || 44100);
 
     // Connect Graph
     this.sourceNode.connect(this.bassFilter);
@@ -264,17 +261,25 @@ export class AudioEngine {
     }
   }
 
+  public setAnalysisMode(mode: 'openviz' | 'avee-classic') {
+    if (this.analysisMode !== mode) {
+      this.analysisMode = mode;
+      const sr = this.ctx?.sampleRate || 44100;
+      this.spectrumAnalyzer = createAnalyzer(mode, sr);
+    }
+  }
+
+  public getAnalysisMode(): 'openviz' | 'avee-classic' {
+    return this.analysisMode;
+  }
+
   public getDSPState(): DSPState {
     return { ...this.dspState };
   }
 
   public getFrequencyData(): FrequencyData {
     if (!this.spectrumAnalyzer) {
-      this.spectrumAnalyzer = new SpectrumAnalyzer({
-        sampleRate: this.ctx?.sampleRate || 44100,
-        fftSize: 4096,
-        bands: 64,
-      });
+      this.spectrumAnalyzer = createAnalyzer(this.analysisMode, this.ctx?.sampleRate || 44100);
     }
 
     if (this.analyser) {

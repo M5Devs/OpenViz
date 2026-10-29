@@ -107,6 +107,7 @@ export interface PostEffect {
 
 export interface OpenVizTemplate {
   schemaVersion: string;
+  analysisMode?: 'openviz' | 'avee-classic';
   name: string;
   author: string;
   canvasAspect: string;
