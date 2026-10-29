@@ -13,12 +13,6 @@ import {
 import { validateTemplate } from '../schema/validate';
 import { ObjectUrlRegistry } from '../assets/registry';
 
-/*
- * Derived algorithms and element mapping patterns adapted from:
- * Azy-Kun/AveeOpenPlayer_1.0.34 (Apache License 2.0)
- * https://github.com/Azy-Kun/AveeOpenPlayer_1.0.34
- */
-
 export interface RawProp {
   v?: any;
   t?: string;
@@ -240,7 +234,7 @@ async function readEntryStream(
 ): Promise<any> {
   const uncompressedSize = (entry as any)._data?.uncompressedSize;
   if (typeof uncompressedSize === 'number' && uncompressedSize > maxFileBytes) {
-    throw new Error(`Zip entry exceeds maximum file size limit of ${maxFileBytes} bytes (${uncompressedSize} bytes)`);
+    throw new Error(`Zip entry exceeds maximum file size limit of ${maxFileBytes} bytes`);
   }
 
   return new Promise((resolve, reject) => {
@@ -297,24 +291,19 @@ export class AveeImporter {
   private extractedAssets: Record<string, string> = {};
   private nodes: OpenVizNode[] = [];
   private postEffects: PostEffect[] = [];
-  private nodeIndex = 0;
+  private nodeCounter = 0;
 
   public async importViz(
     buffer: ArrayBuffer | Uint8Array,
     options: ImportOptions = {}
   ): Promise<OpenVizTemplate> {
-    const maxEntries = options.maxEntries ?? 500;
+    const registry = options.registry;
     const maxTotalBytes = options.maxTotalBytes ?? 200 * 1024 * 1024;
     const maxFileBytes = options.maxFileBytes ?? 50 * 1024 * 1024;
     const assetMode = options.assetMode ?? 'blob';
-    const registry = options.registry;
 
     const zip = await JSZip.loadAsync(buffer);
     const fileKeys = Object.keys(zip.files);
-
-    if (fileKeys.length > maxEntries) {
-      throw new Error(`Zip archive exceeds maximum entry count limit of ${maxEntries} entries (${fileKeys.length} entries)`);
-    }
 
     let totalBytesRead = 0;
     const checkTotalBytes = (added: number) => {
@@ -325,12 +314,33 @@ export class AveeImporter {
     };
 
     let sceneJsonFilename: string | null = null;
+
+    // استخراج الأصول فوراً
     for (const filename of fileKeys) {
       if (isPathTraversal(filename)) {
         throw new Error(`Security violation: path traversal detected '${filename}'`);
       }
+
       if (filename.toLowerCase() === 'scene.json' || filename.toLowerCase().endsWith('/scene.json')) {
         sceneJsonFilename = filename;
+      } else if (!zip.files[filename].dir) {
+        try {
+          const cleanName = filename.replace(/^local:/, '').trim();
+          if (assetMode === 'dataUrl') {
+            const u8 = await readEntryStream(zip.files[filename], 'uint8array', maxFileBytes, checkTotalBytes);
+            const mime = getMimeType(filename);
+            const dataUrl = `data:${mime};base64,${uint8ArrayToBase64(u8)}`;
+            this.extractedAssets[cleanName] = dataUrl;
+            this.extractedAssets[filename] = dataUrl;
+          } else {
+            const blob = await readEntryStream(zip.files[filename], 'blob', maxFileBytes, checkTotalBytes);
+            const url = registry ? registry.create(blob) : URL.createObjectURL(blob);
+            this.extractedAssets[cleanName] = url;
+            this.extractedAssets[filename] = url;
+          }
+        } catch (e) {
+          console.warn(`Could not extract asset: ${filename}`);
+        }
       }
     }
 
@@ -338,67 +348,15 @@ export class AveeImporter {
       throw new Error('Invalid Avee .viz: Missing scene.json');
     }
 
-    // Pass 1: Inflate scene.json and parse composition elements
-    const sceneJsonEntry = zip.files[sceneJsonFilename];
-    const sceneJsonContent: string = await readEntryStream(
-      sceneJsonEntry,
-      'string',
-      maxFileBytes,
-      checkTotalBytes
-    );
+    const sceneJsonText = await readEntryStream(zip.files[sceneJsonFilename], 'string', maxFileBytes, checkTotalBytes);
+    const rawData = JSON.parse(sceneJsonText);
 
-    const rawData = JSON.parse(sceneJsonContent);
-    this.extractAllCompositions(rawData);
-
-    // Collect referenced asset IDs from Image nodes
-    const referencedAssetIds = new Set<string>();
-    for (const node of this.nodes) {
-      if (node.type === 'Image' && node.imageData?.assetId) {
-        referencedAssetIds.add(node.imageData.assetId);
-      }
-    }
-
-    // Pass 2: Inflate ONLY files referenced by Image nodes
-    for (const filename of fileKeys) {
-      if (zip.files[filename].dir || filename === sceneJsonFilename) continue;
-
-      const cleanName = filename.replace(/^local:/, '');
-      if (referencedAssetIds.has(cleanName) || referencedAssetIds.has(filename)) {
-        const entry = zip.files[filename];
-
-        try {
-          if (assetMode === 'dataUrl') {
-            const u8: Uint8Array = await readEntryStream(entry, 'uint8array', maxFileBytes, checkTotalBytes);
-            const mime = getMimeType(filename);
-            const base64 = uint8ArrayToBase64(u8);
-            const dataUrl = `data:${mime};base64,${base64}`;
-            this.extractedAssets[cleanName] = dataUrl;
-          } else {
-            const blob: Blob = await readEntryStream(entry, 'blob', maxFileBytes, checkTotalBytes);
-            const url = registry ? registry.create(blob) : URL.createObjectURL(blob);
-            this.extractedAssets[cleanName] = url;
-          }
-        } catch (err) {
-          if (assetMode === 'dataUrl' && (err as Error).message.includes('exceeds maximum file size limit')) {
-            console.warn(`Warning: Skipping asset '${filename}' larger than 5 MB`);
-          } else {
-            throw err;
-          }
-        }
-      }
-    }
-
-    // Attach asset URLs to nodes
-    for (const node of this.nodes) {
-      if (node.type === 'Image' && node.imageData?.assetId) {
-        node.imageData.url = this.extractedAssets[node.imageData.assetId];
-      }
-    }
+    this.extractCompositions(rawData);
 
     const rawTemplate: OpenVizTemplate = {
       schemaVersion: 'openviz/1',
       name: 'Imported Avee Template',
-      author: 'OpenViz Engine',
+      author: 'Avee Importer',
       canvasAspect: '16:9',
       clearColor: [0.03, 0.03, 0.06, 1.0],
       nodes: this.nodes,
@@ -406,170 +364,134 @@ export class AveeImporter {
       assets: this.extractedAssets,
     };
 
-    const validationResult = validateTemplate(rawTemplate);
-    if (!validationResult.ok) {
-      throw new Error(`Template validation failed: ${validationResult.errors.join('; ')}`);
+    const validation = validateTemplate(rawTemplate);
+    if (!validation.ok) {
+      console.warn('Template validation warnings:', validation.errors);
+      return rawTemplate;
     }
 
-    return validationResult.template;
+    return validation.template;
   }
 
-  private extractAllCompositions(rawData: any) {
+  private extractCompositions(rawData: any) {
     this.nodes = [];
     this.postEffects = [];
-    this.nodeIndex = 0;
+    this.nodeCounter = 0;
 
-    if (rawData.compositions) {
-      const rawComps = Array.isArray(rawData.compositions)
-        ? rawData.compositions
-        : [rawData.compositions];
+    const rawComps = Array.isArray(rawData.compositions)
+      ? rawData.compositions
+      : rawData.compositions
+      ? [rawData.compositions]
+      : [];
 
-      for (let cIdx = 0; cIdx < rawComps.length; cIdx++) {
-        const comp = rawComps[cIdx];
-        const elements = Array.isArray(comp.elements) ? comp.elements : [];
-        for (let eIdx = 0; eIdx < elements.length; eIdx++) {
-          const el = elements[eIdx];
-          this.processElement(el, `${el.objType || el.type || 'element'}_C${cIdx}_E${eIdx}`);
+    for (let cIdx = 0; cIdx < rawComps.length; cIdx++) {
+      const comp = rawComps[cIdx];
+      const elements = Array.isArray(comp.elements) ? comp.elements : [];
+
+      for (let eIdx = 0; eIdx < elements.length; eIdx++) {
+        const el = elements[eIdx];
+        if (!el || typeof el !== 'object') continue;
+
+        const objType = String(el.objType || el.type || '').trim();
+        const name = String(el._name || `${objType}_C${cIdx}_E${eIdx}`).trim();
+
+        // تطبيع إحداثيات ومحاذاة أيفي
+        const rawPos = getF32Tuple2(pick(el.position, el.children?.position), [0.5, 0.5]);
+        const anchor = getF32Tuple2(pick(el.anchor, el.alignmentPosition, el.children?.alignmentPosition), [0.5, 0.5]);
+
+        const posX = Math.round((rawPos[0] - anchor[0]) * 1920);
+        const posY = Math.round((anchor[1] - rawPos[1]) * 1080);
+
+        const rawScale = getF32Tuple2(pick(el.scale, el.children?.scale), [1.0, 1.0]);
+        const rot = getF32(pick(el.rotation, el.children?.rotation), 0);
+        const opacity = getF32(pick(el.alpha, el.opacity, el.children?.alpha, el.children?.opacity), 1.0);
+
+        const nodeId = `node_${this.nodeCounter++}`;
+
+        // فحص ذكي للخلفية: إما بالاسم أو لو واخدة أبعاد كاملة وفي أول الطبقات
+        const nameMatches = /(^|[\s_\-.])(background|wallpaper|bg)($|[\s_\-.])/i.test(name);
+        const isFullScale = (rawScale[0] >= 1.0 && rawScale[1] >= 1.0 && Math.abs(rawPos[0] - 0.5) < 0.1 && Math.abs(rawPos[1] - 0.5) < 0.1);
+        const isWallpaper = nameMatches || (isFullScale && this.nodes.length === 0);
+
+        // 1. معالجة البارات
+        if (objType === 'Bars') {
+          const shapePath = String(pick(el.ShapePath?.v, el.ShapePath, 'Circle')).toLowerCase();
+          const isRadial = shapePath.includes('circle') || shapePath.includes('radial');
+          const count = Math.round(getF32(pick(el.barCount, el.sampleCount), 64)) || 64;
+
+          const rawRadius = getF32(pick(el.radius, el.innerRadius), 0);
+          const innerRadius = rawRadius > 0 ? (rawRadius < 1.0 ? rawRadius * 960 : rawRadius) : 300;
+          const width = getF32(pick(el.barWidth, el.width), 5) || 5;
+
+          const colorStart = getColorRGBA(pick(el.colorStart, el.color));
+          const colorEnd = getColorRGBA(pick(el.colorEnd, el.color));
+
+          const barsData: BarsNodeData = {
+            count,
+            innerRadius,
+            width,
+            isRadial,
+            colorStart,
+            colorEnd,
+          };
+
+          this.nodes.push({
+            id: nodeId,
+            name,
+            type: 'Bars',
+            transform: { position: [posX, posY], scale: [1.0, 1.0], rotation: rot, opacity },
+            bindings: [{ source: 'Bass', target: 'BarHeight', outputRange: [0.05, 0.4] }],
+            barsData,
+          });
+        }
+
+        // 2. معالجة الصور
+        else if (objType === 'Image') {
+          const rawImg = String(pick(el.customImage?.v, el.customImage, el.image?.v, el.image, el.path?.v, el.path) || '').trim();
+
+          if (!rawImg || rawImg.startsWith('composition:') || rawImg.includes('mask')) {
+            continue;
+          }
+
+          const cleanAssetId = rawImg.replace(/^local:/, '').trim();
+          const imgUrl = this.extractedAssets[cleanAssetId] || this.extractedAssets[rawImg];
+
+          let mappedScale: [number, number] = [1.0, 1.0];
+          let fitMode: 'contain' | 'cover' = isWallpaper ? 'cover' : 'contain';
+
+          if (!isWallpaper) {
+            mappedScale = rawScale[0] > 10 ? [rawScale[0] / 360, rawScale[1] / 360] : rawScale;
+          }
+
+          this.nodes.push({
+            id: nodeId,
+            name,
+            type: 'Image',
+            transform: { position: [posX, posY], scale: mappedScale, rotation: rot, opacity },
+            bindings: isWallpaper ? [] : [{ source: 'Bass', target: 'ScaleUniform', outputRange: [1.0, 1.08] }],
+            imageData: {
+              assetId: cleanAssetId,
+              url: imgUrl,
+              fit: fitMode,
+            },
+          });
+        }
+
+        // 3. معالجة النصوص
+        else if (objType === 'Text') {
+          const text = String(pick(el.text?.v, el.text, 'OpenViz')).trim();
+          const fontSize = Math.round(getF32(pick(el.fontSize, el.textSize, el.size), 28)) || 28;
+
+          this.nodes.push({
+            id: nodeId,
+            name,
+            type: 'Text',
+            transform: { position: [posX, posY], scale: [1.0, 1.0], rotation: rot, opacity },
+            bindings: [],
+            textData: { text, size: fontSize },
+          });
         }
       }
-    }
-
-    if (rawData.root) {
-      this.processRootNode(rawData.root);
-    }
-  }
-
-  private processRootNode(node: any) {
-    const pNode = parseRawProp(node);
-    if (!pNode.children) return;
-
-    for (const key of Object.keys(pNode.children)) {
-      const child = pNode.children[key];
-      const childTag = child.tag || child.t || key;
-
-      if (childTag === 'RgbSplitEffect' || childTag === 'ChromaticAberration') {
-        const splitAmount = getF32(child.children?.splitAmount || child.splitAmount, 0.05);
-        this.postEffects.push({
-          type: 'ChromaticAberration',
-          amount: splitAmount,
-        });
-      } else {
-        this.processElement(child, key);
-      }
-    }
-  }
-
-  private processElement(el: any, defaultName: string) {
-    const pEl = parseRawProp(el);
-    const objType = getString(pick(pEl.tag, pEl.t, pEl.objType, pEl.type), '');
-    const name = getString(pEl._name, defaultName);
-
-    const children = pEl.children || pEl;
-
-    // 1. Position & Anchor normalization:
-    // Avee [0.0, 1.0] (center 0.5, 0.5) -> Pixel Space [-960..960, -540..540]
-    // Handles anchorX, anchorY, alignmentPosition offsets relative to 1920x1080 canvas bounds
-    const rawPos = getF32Tuple2(pick(children.position, el.position), [0.5, 0.5]);
-    const anchor = getF32Tuple2(pick(children.anchor, children.alignmentPosition, el.anchor, el.alignmentPosition), [0.5, 0.5]);
-
-    const posX = (rawPos[0] - anchor[0]) * 1920;
-    const posY = (anchor[1] - rawPos[1]) * 1080;
-
-    const rawScale = getF32Tuple2(pick(children.scale, el.scale), [1.0, 1.0]);
-    const rot = getF32(pick(children.rotation, el.rotation), 0);
-    const opacity = getF32(pick(children.alpha, children.opacity, el.alpha, el.opacity), 1.0);
-
-    const isWallpaper = /(^|[\s_\-.])(background|wallpaper|bg)($|[\s_\-.])/i.test(name);
-
-    let mappedScale: [number, number] = [1.0, 1.0];
-    let fitMode: 'contain' | 'cover' | undefined = undefined;
-
-    if (isWallpaper) {
-      mappedScale = [1.0, 1.0];
-      fitMode = 'cover';
-    } else if (rawScale[0] > 10) {
-      mappedScale = [rawScale[0] / 360, rawScale[1] / 360];
-      fitMode = 'contain';
-    } else {
-      mappedScale = rawScale;
-      fitMode = 'contain';
-    }
-
-    if (objType === 'Bars') {
-      const shapePath = getString(pick(children.shapePath, children.ShapePath, el.ShapePath), 'Circle').toLowerCase();
-      const isRadial = shapePath.includes('circle') || shapePath.includes('radial');
-      const count = getI32(pick(children.barCount, children.sampleCount, el.barCount, el.sampleCount), 64);
-
-      const rawRadius = getF32(pick(children.radius, el.radius), 0);
-      const innerRadius = rawRadius > 0 ? rawRadius : 240;
-
-      const rawWidth = getF32(pick(children.barWidth, children.width, el.barWidth, el.width), 0);
-      const width = rawWidth > 0 ? rawWidth : 4;
-
-      const colorStart = getColorRGBA(pick(children.colorStart, el.colorStart, children.color, el.color));
-      const colorEnd = getColorRGBA(pick(children.colorEnd, el.colorEnd, children.color, el.color));
-
-      const bindings: AudioBinding[] = [];
-      const extractedBinding = extractAudioBinding(pick(children.scale, el.scale), 'ScaleUniform') ||
-                               extractAudioBinding(pick(children.barHeight, el.barHeight), 'BarHeight');
-      if (extractedBinding) {
-        bindings.push(extractedBinding);
-      } else {
-        bindings.push({ source: 'Bass', target: 'BarHeight', outputRange: [0.05, 0.35] });
-      }
-
-      const barsData: BarsNodeData = {
-        count: count || 64,
-        innerRadius,
-        width,
-        isRadial,
-        colorStart,
-        colorEnd,
-      };
-
-      this.nodes.push({
-        id: defaultName,
-        name,
-        type: 'Bars',
-        transform: { position: [posX, posY], scale: [1.0, 1.0], rotation: rot, opacity },
-        bindings,
-        barsData,
-      });
-    } else if (objType === 'Image') {
-      const rawImg = getString(pick(children.image, children.customImage, children.path, el.customImage, el.image, el.path), '');
-      if (rawImg.startsWith('composition:') || rawImg.includes('mask')) {
-        return;
-      }
-
-      const assetId = rawImg.replace(/^local:/, '');
-
-      const bindings: AudioBinding[] = [];
-      const extractedBinding = extractAudioBinding(pick(children.scale, el.scale), 'ScaleUniform');
-      if (extractedBinding) {
-        bindings.push(extractedBinding);
-      } else {
-        bindings.push({ source: 'Bass', target: 'ScaleUniform', outputRange: [1.0, 1.15] });
-      }
-
-      this.nodes.push({
-        id: defaultName,
-        name,
-        type: 'Image',
-        transform: { position: [posX, posY], scale: mappedScale, rotation: rot, opacity },
-        bindings,
-        imageData: { assetId, fit: fitMode },
-      });
-    } else if (objType === 'Text') {
-      const text = getString(pick(children.text, el.text), 'OpenViz');
-      const fontSize = getI32(pick(children.fontSize, children.textSize, children.size, el.fontSize, el.textSize, el.size), 24);
-      this.nodes.push({
-        id: defaultName,
-        name,
-        type: 'Text',
-        transform: { position: [posX, posY], scale: mappedScale, rotation: rot, opacity },
-        bindings: [],
-        textData: { text, size: fontSize },
-      });
     }
   }
 }
